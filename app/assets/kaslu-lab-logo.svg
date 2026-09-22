@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="KASLU LAB">
+  <defs>
+    <linearGradient id="kaslu-stem" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#0D47A1"/>
+      <stop offset="100%" stop-color="#1565C0"/>
+    </linearGradient>
+    <linearGradient id="kaslu-upper" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1565C0"/>
+      <stop offset="55%" stop-color="#26C6DA"/>
+      <stop offset="100%" stop-color="#66BB6A"/>
+    </linearGradient>
+    <linearGradient id="kaslu-lower" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1976D2"/>
+      <stop offset="100%" stop-color="#29B6F6"/>
+    </linearGradient>
+    <filter id="kaslu-soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4.5" flood-color="#0D47A1" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <g filter="url(#kaslu-soft)">
+    <rect x="18" y="16" width="22" height="88" rx="11" fill="url(#kaslu-stem)"/>
+    <path d="M40 58 L88 16 L98 28 L58 58 L98 92 L88 104 L40 66 Z" fill="url(#kaslu-upper)"/>
+    <path d="M40 62 L82 104 L72 112 L40 78 Z" fill="url(#kaslu-lower)" opacity="0.95"/>
+  </g>
+</svg>
