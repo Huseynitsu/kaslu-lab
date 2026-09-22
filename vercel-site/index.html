@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KASLU LAB</title>
+    <meta
+      name="description"
+      content="KASLU LAB — PN/A reactor operation log and lab platform."
+    />
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 40rem;
+        margin: 4rem auto;
+        padding: 0 1.25rem;
+        line-height: 1.5;
+        color: #0f172a;
+      }
+      a {
+        color: #1565c0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>KASLU LAB</h1>
+    <p>
+      The full Streamlit app is hosted on
+      <strong>Render</strong> or <strong>Streamlit Cloud</strong> (see repo
+      <code>docs/DEPLOY.md</code>).
+    </p>
+    <p id="link-block" hidden>
+      <a id="app-link" href="#">Open live app</a>
+    </p>
+    <script>
+      const app = new URLSearchParams(location.search).get("app");
+      if (app) {
+        document.getElementById("link-block").hidden = false;
+        const a = document.getElementById("app-link");
+        a.href = app;
+        a.textContent = app;
+      }
+    </script>
+  </body>
+</html>

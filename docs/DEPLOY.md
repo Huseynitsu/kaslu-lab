@@ -20,14 +20,30 @@ This app is **Streamlit** (long-running Python + WebSockets). **Vercel serverles
 
 **Note:** SQLite (`anammox.db`) on free tiers may reset on redeploy — fine for demos; use managed DB for production.
 
-## Vercel (domain / landing only)
+## Vercel (landing page — live)
 
-Use Vercel when you want:
+Static landing (not the Streamlit app):
 
-- A **`*.vercel.app`** landing that links to Streamlit/Render, or
-- **DNS** for a domain you bought on Vercel, pointing to Streamlit/Render (see Streamlit custom domain docs).
+- **https://vercel-site-six-rho.vercel.app**
 
-Do **not** expect `vercel deploy` to run Streamlit without a separate container host.
+Deploy updates from `vercel-site/`:
+
+```bash
+cd vercel-site && npx vercel deploy --prod
+```
+
+**Custom domain:** Vercel dashboard → project **vercel-site** → **Domains** → add/buy a domain. Point the app itself to Render/Streamlit, then link from the landing page (`?app=https://your-streamlit-url`).
+
+Do **not** expect the root repo `vercel deploy` to run Streamlit — Vercel is serverless; use Render or Streamlit Cloud for the full app.
+
+## GitHub
+
+Repo (create/push if needed): `https://github.com/Huseynitsu/kaslu-lab` — push from your machine if the remote push failed:
+
+```powershell
+cd C:\Users\Huseyn\Desktop\my-first-project
+git push -u origin main
+```
 
 ## Local
 
