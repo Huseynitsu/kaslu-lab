@@ -9,37 +9,132 @@
       content="KASLU LAB — PN/A reactor operation log and lab platform."
     />
     <style>
+      :root {
+        color-scheme: light;
+        --bg: #f1f5f9;
+        --card: #ffffff;
+        --text: #0f172a;
+        --muted: #64748b;
+        --primary: #1565c0;
+        --border: #e2e8f0;
+      }
       body {
-        font-family: system-ui, sans-serif;
-        max-width: 40rem;
-        margin: 4rem auto;
-        padding: 0 1.25rem;
-        line-height: 1.5;
-        color: #0f172a;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 2rem 2.25rem;
+        max-width: 32rem;
+        box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06);
+      }
+      h1 {
+        margin: 0 0 0.35rem;
+        font-size: 1.75rem;
+      }
+      .sub {
+        color: var(--muted);
+        margin: 0 0 1.25rem;
+        font-size: 0.95rem;
+      }
+      .status {
+        background: #fff7ed;
+        border: 1px solid #fed7aa;
+        color: #9a3412;
+        padding: 0.75rem 1rem;
+        border-radius: 10px;
+        font-size: 0.9rem;
+        margin-bottom: 1.25rem;
+      }
+      ol {
+        margin: 0;
+        padding-left: 1.2rem;
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.55;
+      }
+      ol li {
+        margin-bottom: 0.45rem;
       }
       a {
-        color: #1565c0;
+        color: var(--primary);
+      }
+      code {
+        font-size: 0.85em;
+        background: #f8fafc;
+        padding: 0.1rem 0.35rem;
+        border-radius: 4px;
+      }
+      .local {
+        margin-top: 1.25rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.85rem;
+        color: var(--muted);
       }
     </style>
   </head>
   <body>
-    <h1>KASLU LAB</h1>
-    <p>
-      The full Streamlit app is hosted on
-      <strong>Render</strong> or <strong>Streamlit Cloud</strong> (see repo
-      <code>docs/DEPLOY.md</code>).
-    </p>
-    <p id="link-block" hidden>
-      <a id="app-link" href="#">Open live app</a>
-    </p>
+    <main class="card">
+      <h1>KASLU LAB</h1>
+      <p class="sub">PN/A lab platform · 卡琉实验室</p>
+
+      <div class="status" id="status">
+        Public app is not live yet. This page is only the entry point on Vercel.
+        <br />
+        <span lang="az">Tam proqram hələ internetdə yoxdur — yalnız giriş səhifəsidir.</span>
+      </div>
+
+      <p><strong>Connect the full Streamlit app (one time):</strong></p>
+      <ol>
+        <li>
+          Push code to GitHub:
+          <code>Huseynitsu/kaslu-lab</code>
+          (<code>git push origin main</code>).
+        </li>
+        <li>
+          Open
+          <a href="https://share.streamlit.io/deploy" target="_blank" rel="noopener"
+            >share.streamlit.io</a
+          >
+          → New app → pick that repo → main file
+          <code>streamlit_app.py</code>.
+        </li>
+        <li>
+          After deploy, open your app URL (e.g.
+          <code>https://….streamlit.app</code>). Optional: add
+          <code>?app=YOUR_URL</code> to this page to show an Open app button.
+        </li>
+      </ol>
+
+      <p class="local">
+        Local run:
+        <code>.\scripts\run-app.ps1</code> →
+        <a href="http://localhost:8501">localhost:8501</a>
+      </p>
+    </main>
     <script>
-      const app = new URLSearchParams(location.search).get("app");
-      if (app) {
-        document.getElementById("link-block").hidden = false;
-        const a = document.getElementById("app-link");
-        a.href = app;
-        a.textContent = app;
-      }
+      (function () {
+        const app = new URLSearchParams(location.search).get("app");
+        if (!app) return;
+        const status = document.getElementById("status");
+        status.style.background = "#ecfdf5";
+        status.style.borderColor = "#a7f3d0";
+        status.style.color = "#065f46";
+        status.innerHTML =
+          'App link configured. <a href="' +
+          app +
+          '" rel="noopener">Open KASLU LAB →</a>';
+      })();
     </script>
   </body>
 </html>

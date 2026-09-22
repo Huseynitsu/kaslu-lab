@@ -24,7 +24,8 @@ This app is **Streamlit** (long-running Python + WebSockets). **Vercel serverles
 
 Static landing (not the Streamlit app):
 
-- **https://vercel-site-six-rho.vercel.app**
+- **https://kaslu-lab.vercel.app** (project `kaslu-lab`)
+- **https://vercel-site-six-rho.vercel.app** (project `vercel-site`)
 
 Deploy updates from `vercel-site/`:
 
