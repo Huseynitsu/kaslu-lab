@@ -18,13 +18,14 @@ from core.operation_log_charts import build_display_table, build_line_chart_df, 
 from core.oplog_inhibition_charts import build_fa_chart_df, build_fna_chart_df
 from core.operation_log_ui import render_oplog_data_quality, render_section_advice
 from core.ui.layout import render_app_chrome, render_sidebar_footer, render_sidebar_navigation, setup_page_config
+from core.ui.navigation import switch_to
 from core.ui.operation_log_empty import render_oplog_empty_state
 
 load_env()
 setup_page_config(t("oplog.title"))
 
 if st.session_state.get("user_id") is None:
-    st.switch_page("Home.py")
+    switch_to("Home.py")
     st.stop()
 
 render_app_chrome("operation_log", defer_nav=True)

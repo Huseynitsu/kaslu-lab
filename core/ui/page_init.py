@@ -8,6 +8,7 @@ import sys
 import streamlit as st
 
 from core.ui.layout import render_app_chrome, render_sidebar_footer, setup_page_config
+from core.ui.navigation import switch_to
 
 HOME_PATH = "Home.py"
 
@@ -29,7 +30,7 @@ def bootstrap_page(
     setup_page_config(title, wide=wide)
 
     if st.session_state.get("user_id") is None:
-        st.switch_page(HOME_PATH)
+        switch_to(HOME_PATH)
         st.stop()
 
     render_app_chrome(page_id)

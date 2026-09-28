@@ -10,11 +10,12 @@ import streamlit as st
 from core.i18n import t
 from core.ui.components import render_module_card, render_page_header, render_section, render_workflow_strip
 from core.ui.layout import render_app_chrome, render_sidebar_footer, setup_page_config
+from core.ui.navigation import switch_to
 
 setup_page_config(t("dash.title"))
 
 if st.session_state.get("user_id") is None:
-    st.switch_page("Home.py")
+    switch_to("Home.py")
     st.stop()
 
 from core.database import get_user_experiments, get_lab_readings

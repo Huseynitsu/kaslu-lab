@@ -9,7 +9,7 @@ import streamlit as st
 from core.auth_session import clear_login
 from core.i18n import init_lang, t
 from core.ui.brand import inject_seo, logo_path, render_logo_html
-from core.ui.navigation import navigate_to, render_page_transition_overlay
+from core.ui.navigation import navigate_to, render_page_transition_overlay, switch_to
 from core.ui.theme import inject_theme_css, init_theme, render_topbar_theme_segment
 
 DASHBOARD_PATH = "pages/1_Lab_Dashboard.py"
@@ -201,7 +201,7 @@ def _render_top_toolbar(current_page: str) -> None:
             with logout_col:
                 if st.button(t("ui.logout_short"), key="top_logout", use_container_width=True):
                     clear_login()
-                    st.switch_page(HOME_PATH)
+                    switch_to(HOME_PATH)
 
 
 def render_app_chrome(current_page: str, *, defer_nav: bool = False) -> None:

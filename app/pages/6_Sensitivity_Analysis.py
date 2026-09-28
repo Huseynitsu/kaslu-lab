@@ -10,11 +10,12 @@ import pandas as pd
 import numpy as np
 
 from core.ui.layout import render_app_chrome, render_sidebar_footer, setup_page_config
+from core.ui.navigation import switch_to
 
 setup_page_config("Sensitivity Analysis")
 
 if st.session_state.get("user_id") is None:
-    st.switch_page("Home.py")
+    switch_to("Home.py")
     st.stop()
 
 from core.config import ExperimentConfig

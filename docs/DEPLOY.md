@@ -8,7 +8,8 @@ This app is **Streamlit** (long-running Python + WebSockets). **Vercel serverles
 
 1. Push this repo to **GitHub** (public or private).
 2. Open [share.streamlit.io](https://share.streamlit.io) → **New app**.
-3. **Main file path:** `app/Home.py`
+3. **Main file path:** `streamlit_app.py` (recommended on Cloud) or `app/Home.py` for local-style entry.
+   - Cloud uses root `pages/*.py` shims → real code in `app/pages/`. After adding pages, run `python scripts/sync_root_pages.py`.
 4. Add secrets from `.env.example` in the Cloud **Secrets** UI (optional AI keys).
 5. You get a public URL like `https://your-app.streamlit.app`.
 

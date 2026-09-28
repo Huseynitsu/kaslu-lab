@@ -9,11 +9,12 @@ import streamlit as st
 import pandas as pd
 
 from core.ui.layout import render_app_chrome, render_sidebar_footer, setup_page_config
+from core.ui.navigation import switch_to
 
 setup_page_config("AI Advisor")
 
 if st.session_state.get("user_id") is None:
-    st.switch_page("Home.py")
+    switch_to("Home.py")
     st.stop()
 
 import core.database as db

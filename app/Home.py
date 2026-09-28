@@ -34,7 +34,9 @@ if "username" not in st.session_state:
     st.session_state["username"] = None
 
 if st.session_state["user_id"] is not None:
-    st.switch_page("pages/1_Lab_Dashboard.py")
+    from core.ui.navigation import switch_to
+
+    switch_to("pages/1_Lab_Dashboard.py")
     st.stop()
 
 st.markdown('<div id="kaslu-login"></div>', unsafe_allow_html=True)

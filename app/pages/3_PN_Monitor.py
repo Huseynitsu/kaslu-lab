@@ -8,11 +8,12 @@ if PROJECT_ROOT not in sys.path:
 import streamlit as st
 
 from core.ui.layout import render_app_chrome, render_sidebar_footer, render_sidebar_navigation, setup_page_config
+from core.ui.navigation import switch_to
 
 setup_page_config("PN Monitor")
 
 if st.session_state.get("user_id") is None:
-    st.switch_page("Home.py")
+    switch_to("Home.py")
     st.stop()
 
 from core.pn_control import assess_pn_operation
