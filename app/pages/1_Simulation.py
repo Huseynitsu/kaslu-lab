@@ -40,6 +40,11 @@ from core.multi_column_analysis import (
 from core.ui.theme import apply_matplotlib_theme
 from core.pn_config import PNConfig
 from core.pn_simulation import simulate_pn_30_days
+from core.pna_model import ReactorConfig
+from core.pna_model import simulate as simulate_pna
+from core.constants import PNA_MAX_TN_REMOVAL
+from core.lab_table import extract_column
+import pandas as pd
 from core.simulation import simulate_30_days
 
 init_lab_state()
@@ -47,14 +52,15 @@ render_app_chrome("simulation")
 
 st.title("Reactor Performance Analysis")
 st.markdown("""
-Compare **Distilled water**, **Entrance water**, and **Reactor** measurements together:
-differences, removal efficiency, NO2/NH4 ratio vs ideal 1.32, and optional 30-day kinetic forecast.
+Compare **Entrance (influent)** and **Reactor (bulk/effluent)**; **Distilled water** is the reagent blank.
+Indicators depend on the reactor type: PN → NO₂/NH₄ of the effluent vs 1.32 (anammox feed);
+anammox → ΔNO₂/ΔNH₄ ≈ 1.32 and ΔNO₃/ΔNH₄ ≈ 0.26; one-stage PN/A → TIN removal and ΔNO₃/ΔNH₄ ≈ 0.11.
 """)
 
 stage = st.radio(
     "Reactor type",
-    ["pn", "anammox"],
-    format_func=lambda x: "PN reactor" if x == "pn" else "UASB / Anammox reactor",
+    ["pna", "pn", "anammox"],
+    format_func=lambda x: {"pna": "One-stage PN/A", "pn": "PN reactor (two-stage)", "anammox": "UASB / Anammox reactor"}[x],
     horizontal=True,
 )
 
@@ -71,7 +77,7 @@ edited_df = st.data_editor(
 st.session_state[LAB_TABLE] = dataframe_to_table(edited_df)
 
 st.subheader("Sample points for analysis")
-st.caption("Select which columns to include in charts and calculations (default: all three).")
+st.caption("Entrance + Reactor are needed for removal indicators; the blank is only checked for contamination.")
 
 selected_columns = []
 cols = st.columns(3)
@@ -88,11 +94,13 @@ if not selected_columns:
 st.session_state[LAB_SELECTED_COLUMNS] = selected_columns
 
 st.subheader("Operating conditions (optional — kinetic forecast only)")
-st.caption("Used for 30-day reactor forecast. Literature defaults apply when unchecked.")
+st.caption("Forecast = uncalibrated mechanistic model (Hao et al. 2002 structure). Entrance values are used as the "
+           "influent and Reactor values as the initial state. Literature defaults apply when unchecked.")
+hrt_h = st.number_input("HRT (h) — continuous operation (0 = batch)", min_value=0.0, value=24.0, step=1.0)
 
 use_custom = {}
 custom_values = {}
-op_params = ["temperature", "do", "srt", "biomass"]
+op_params = ["temperature", "do", "srt", "biomass"]  # biomass = AOB (PN) or anammox (anammox, PN/A)
 if stage == "anammox":
     op_params.append("hco3")
 
@@ -150,16 +158,21 @@ if run_analysis or run_save:
             use_container_width=True,
         )
 
+    if result.indicators:
+        st.subheader("Process indicators (Entrance → Reactor)")
+        st.dataframe(pd.DataFrame([result.indicators]).round(3), use_container_width=True, hide_index=True)
+
     if not result.efficiency_df.empty:
         st.subheader("Removal efficiency (Entrance → Reactor)")
-        st.caption("Efficiency (%) = (Entrance − Reactor) / Entrance × 100")
+        st.caption("Efficiency (%) = (Entrance − Reactor) / Entrance × 100; TIN = NH₄ + NO₂ + NO₃")
         eff_display = result.efficiency_df.drop(columns=["param_key"], errors="ignore")
         st.dataframe(eff_display, use_container_width=True, hide_index=True)
 
-    st.subheader("NO2/NH4 performance index")
-    st.caption("Ideal Anammox feed ratio = 1.32 (Strous et al. [1][2])")
-    ratio_display = result.ratio_df.drop(columns=["column_key"], errors="ignore")
-    st.dataframe(ratio_display, use_container_width=True, hide_index=True)
+    if not result.ratio_df.empty:
+        st.subheader("NO2/NH4 — anammox feed check")
+        st.caption("Ideal anammox FEED ratio = 1.32 (Strous et al. 1998). Not meaningful inside a one-stage PN/A reactor.")
+        ratio_display = result.ratio_df.drop(columns=["column_key"], errors="ignore")
+        st.dataframe(ratio_display, use_container_width=True, hide_index=True)
 
     st.subheader("Alerts")
     for alert in result.alerts:
@@ -189,12 +202,10 @@ if run_analysis or run_save:
     if fig3:
         st.pyplot(fig3)
         plt.close(fig3)
-    else:
-        st.info("Ratio chart requires measurable NH4 at selected sample points.")
 
     if run_save:
-        if "reactor" not in selected_columns:
-            st.error("Saving to history requires the Reactor column to be selected (kinetic forecast uses reactor values).")
+        if "reactor" not in selected_columns or "entrance" not in selected_columns:
+            st.error("Saving to history requires the Entrance and Reactor columns (influent + initial state).")
         else:
             table_json = table_to_json(table)
             columns_json = selected_columns_to_json(selected_columns)
@@ -202,7 +213,47 @@ if run_analysis or run_save:
                 table, "reactor", stage, use_custom, custom_values
             )
 
-            if stage == "pn":
+            entrance_vals = extract_column(table, "entrance")
+            entrance_nh4 = entrance_vals["nh4"]
+            if stage == "pna":
+                pna_cfg = ReactorConfig(
+                    nh4=reactor_inputs.nh4, no2=reactor_inputs.no2, no3=reactor_inputs.no3,
+                    nh4_in=entrance_vals["nh4"], no2_in=entrance_vals["no2"], no3_in=entrance_vals["no3"],
+                    hrt_d=hrt_h / 24.0 if hrt_h > 0 else None,
+                    ph=reactor_inputs.ph, temperature=reactor_inputs.temperature, do=reactor_inputs.do,
+                    x_amx=reactor_inputs.biomass, srt_amx=reactor_inputs.srt, days=30, dt_min=10.0,
+                )
+                df = simulate_pna(pna_cfg)
+                df = df[df["Day"] >= 1].reset_index(drop=True)
+                df["Day"] = df["Day"].round().astype(int)
+                df["Biomass"] = df["AMX"]
+                df["Stability"] = (df["TIN_removal_pct"] / 100.0 / PNA_MAX_TN_REMOVAL).clip(0, 1)
+                final = df.iloc[-1]
+                diag = interpret_daily_reading(
+                    reactor_inputs.nh4, reactor_inputs.no2, reactor_inputs.no3,
+                    entrance_vals["nh4"], entrance_vals["no2"], entrance_vals["no3"], stage="pna",
+                )
+                alert_text = " | ".join(a.message for a in result.alerts)
+                save_lab_reading(
+                    user_id=st.session_state["user_id"], stage="pna",
+                    nh4=reactor_inputs.nh4, no2=reactor_inputs.no2, no3=reactor_inputs.no3,
+                    ph=reactor_inputs.ph, temperature=reactor_inputs.temperature, do=reactor_inputs.do,
+                    srt=reactor_inputs.srt, notes=notes, status=diag.status, findings=alert_text,
+                )
+                exp_config = ExperimentConfig(
+                    nh4=reactor_inputs.nh4, no2=reactor_inputs.no2, no3=reactor_inputs.no3, hco3=0.0,
+                    ph=reactor_inputs.ph, temperature=reactor_inputs.temperature, do=reactor_inputs.do,
+                    x_anammox=reactor_inputs.biomass, srt=reactor_inputs.srt,
+                )
+                experiment_id = save_experiment(
+                    user_id=st.session_state["user_id"], config=exp_config,
+                    final_nh4=float(final["NH4"]), final_no2=float(final["NO2"]), final_no3=float(final["NO3"]),
+                    final_biomass=float(final["AMX"]), stability=float(final["Stability"]), stage="pna",
+                    initial_no3=reactor_inputs.no3, notes=notes,
+                    lab_table_json=table_json, sim_sources_json=columns_json,
+                )
+                save_timeseries(experiment_id, df)
+            elif stage == "pn":
                 pn_config = PNConfig(
                     nh4=reactor_inputs.nh4,
                     no2=reactor_inputs.no2,
@@ -212,6 +263,8 @@ if run_analysis or run_save:
                     do=reactor_inputs.do,
                     srt=reactor_inputs.srt,
                     x_aob=reactor_inputs.biomass,
+                    influent_nh4=entrance_nh4 if hrt_h > 0 else 0.0,
+                    hrt_days=hrt_h / 24.0,
                 )
                 df = simulate_pn_30_days(pn_config)
                 final = df.iloc[-1]
@@ -262,6 +315,10 @@ if run_analysis or run_save:
                 save_timeseries(experiment_id, df.rename(columns={"AOB": "Biomass", "NAR": "Stability"}))
             else:
                 an_config = ExperimentConfig(
+                    hrt_d=hrt_h / 24.0 if hrt_h > 0 else None,
+                    nh4_in=entrance_vals["nh4"],
+                    no2_in=entrance_vals["no2"],
+                    no3_in=entrance_vals["no3"],
                     nh4=reactor_inputs.nh4,
                     no2=reactor_inputs.no2,
                     no3=reactor_inputs.no3,
@@ -316,9 +373,7 @@ if run_analysis or run_save:
             st.subheader("30-day kinetic forecast (Reactor column)")
             apply_matplotlib_theme()
             st.line_chart(df.set_index("Day")[["NH4", "NO2", "NO3"]])
-            if stage == "pn":
-                st.caption("PN trend: NH4↓, NO2↑, NO3 low if NOB suppressed [3][6].")
-            else:
-                st.caption("Anammox trend: NH4+NO2↓, intrinsic NO3↑ [1].")
+            st.caption("Uncalibrated model forecast — compare with your measurements before using it. "
+                       "Stability column = TIN removal / theoretical maximum (PN/A, anammox) or NAR (PN).")
 
 render_sidebar_footer()

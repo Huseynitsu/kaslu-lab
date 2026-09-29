@@ -303,8 +303,20 @@ def build_section_analyses(
                         "反应器 (1) ANR 下降 — 请检查生物量滞留与活性。",
                     )
                 )
+        if "hrt" in schema.detected_fields and "loading_influent_g_n_l_d" in ops_cols and "tn_influent_mg_l" in df.columns:
+            hrt_h = df["hrt"].astype(float)
+            calc = df["tn_influent_mg_l"].astype(float) * 24.0 / hrt_h / 1000.0
+            logged = df["loading_influent_g_n_l_d"].astype(float)
+            rel = ((calc - logged).abs() / logged.where(logged > 0)).dropna()
+            if len(rel):
+                if rel.max() > 0.1:
+                    recs.append(_L(f"Logged NLR differs from TN_in × 24 / HRT by up to {rel.max():.0%} — check units/HRT.",
+                                   f"记录的 NLR 与 TN进水 × 24 / HRT 最多相差 {rel.max():.0%} — 请检查单位/HRT。"))
+                else:
+                    recs.append(_L("Logged NLR matches TN_in × 24 / HRT (within 10%).", "记录的 NLR 与 TN进水 × 24 / HRT 一致（误差 10% 内）。"))
         if not recs:
-            recs.append(_L("Operating load and ANR are consistent with the logged HRT.", "运行负荷与 ANR 和记录的 HRT 一致。"))
+            recs.append(_L("No inconsistency detected in logged load/ANR (HRT-based check not possible without TN and HRT).",
+                           "负荷/ANR 未见异常（缺少 TN 或 HRT，无法进行基于 HRT 的核对）。"))
         sections.append(
             SectionAdvice(
                 section_id="ops",
@@ -350,95 +362,74 @@ def build_section_analyses(
             SectionAdvice(section_id="compare", title=_L("Reactor 1 vs 2", "反应器 1 vs 2"), summary=summary_text, highlights=highlights, recommendations=recs)
         )
 
-    if "nh4_influent_mg_l" in schema.detected_fields:
-        from core.chemistry import free_ammonia_mg_l
+    from core.chemistry import free_ammonia_as_molecule, free_nitrous_acid_mg_l
 
-        fa_series = df["nh4_influent_mg_l"].apply(
-            lambda v: free_ammonia_mg_l(v, fa_ph, fa_temp) if pd.notna(v) else None
+    def _row_ph_t(row):
+        ph = row.get("ph") if "ph" in df.columns else None
+        tc = row.get("temperature_c") if "temperature_c" in df.columns else None
+        return (float(ph) if pd.notna(ph) else fa_ph), (float(tc) if pd.notna(tc) else fa_temp)
+
+    # FA must be computed from the REACTOR (bulk ≈ effluent) ammonium, not the influent.
+    fa_source = next((c for c in ("reactor1_effluent_mg_l", "nh4_influent_mg_l") if c in schema.detected_fields), None)
+    if fa_source is not None:
+        fa_series = df.apply(
+            lambda r: free_ammonia_as_molecule(r[fa_source], *_row_ph_t(r)) if pd.notna(r[fa_source]) else None,
+            axis=1,
         )
         fa = _stats(fa_series)
         highlights: list = []
         recs: list = []
+        src_txt = "reactor effluent" if fa_source == "reactor1_effluent_mg_l" else "influent (no effluent column — overestimates FA in a mixed reactor)"
         summary_text = _L(
-            f"Free ammonia (FA, NH₃-N) from influent NH₄: FA = NH₄ / (1 + 10^(pKa − pH)), "
-            f"pH {fa_ph}, {fa_temp} °C (sidebar).",
-            f"由进水 NH₄ 估算游离氨 FA（NH₃-N）：FA = NH₄ / (1 + 10^(pKa − pH))，"
-            f"侧边栏 pH {fa_ph}、{fa_temp} °C。",
+            f"Free ammonia (FA, mg NH₃/L, Anthonisen 1976) from {src_txt} NH₄, "
+            f"using logged pH/T where available, otherwise pH {fa_ph}, {fa_temp} °C.",
+            f"游离氨 FA（mg NH₃/L，Anthonisen 1976），基于反应器出水 NH₄；有记录时使用实测 pH/温度，否则 pH {fa_ph}、{fa_temp} °C。",
         )
         if fa:
-            highlights.append(
-                MetricHighlight(
-                    label=_L("FA (estimated)", "FA（估算）"),
-                    value=f"{fa['latest']:.3f} mg/L",
-                    caption=_stat_caption(fa, decimals=3),
-                )
-            )
-            if fa["latest"] >= 1.0:
-                summary_text += " " + _L(
-                    "FA is high enough to inhibit NOB more than AOB during partial nitritation.",
-                    "FA 足够高，在部分亚硝化阶段可更强烈抑制 NOB。",
-                )
-                recs.append(_L("Verify pH control strategy with measured pH in the Excel log.", "请在 Excel 中加入实测 pH 并验证 pH 控制策略。"))
+            highlights.append(MetricHighlight(label=_L("FA (estimated)", "FA（估算）"),
+                                              value=f"{fa['latest']:.3f} mg NH₃/L",
+                                              caption=_stat_caption(fa, decimals=3)))
+            if fa["latest"] >= 10.0:
+                summary_text += " " + _L("FA ≥ 10 mg NH₃/L — AOB (and anammox) may also be inhibited.",
+                                         "FA ≥ 10 mg NH₃/L — AOB（及厌氧氨氧化菌）也可能受抑制。")
+                recs.append(_L("Lower pH or residual NH₄ to protect AOB/anammox.", "降低 pH 或残余 NH₄ 以保护 AOB/厌氧氨氧化菌。"))
+            elif fa["latest"] >= 0.1:
+                summary_text += " " + _L("FA is in the NOB-selective window (0.1–10 mg NH₃/L).",
+                                         "FA 处于选择性抑制 NOB 的区间（0.1–10 mg NH₃/L）。")
             else:
-                recs.append(_L("Consider raising pH if NOB activity is observed.", "若观察到 NOB 活性，可考虑提高 pH。"))
-            recs.append(_L("Add measured pH and temperature columns for accurate FA.", "请添加实测 pH 和温度列以获得准确 FA。"))
-            sections.append(
-                SectionAdvice(
-                    section_id="fa",
-                    title=_L("Free ammonia (FA)", "游离氨 (FA)"),
-                    summary=summary_text,
-                    highlights=highlights,
-                    recommendations=recs,
-                )
-            )
+                recs.append(_L("FA < 0.1 mg NH₃/L gives no FA-based NOB suppression — rely on DO control.",
+                               "FA < 0.1 mg NH₃/L，无法依靠 FA 抑制 NOB — 需依靠 DO 控制。"))
+            if "ph" not in df.columns or "temperature_c" not in df.columns:
+                recs.append(_L("Add measured pH and temperature columns for accurate FA.", "请添加实测 pH 和温度列以获得准确 FA。"))
+            sections.append(SectionAdvice(section_id="fa", title=_L("Free ammonia (FA)", "游离氨 (FA)"),
+                                          summary=summary_text, highlights=highlights, recommendations=recs))
 
     if "no2_effluent_mg_l" in schema.detected_fields and df["no2_effluent_mg_l"].notna().any():
-        from core.chemistry import free_nitrous_acid_mg_l
-
-        fna_series = df["no2_effluent_mg_l"].apply(
-            lambda v: free_nitrous_acid_mg_l(v, fa_ph, fa_temp) if pd.notna(v) else None
+        fna_series = df.apply(
+            lambda r: free_nitrous_acid_mg_l(r["no2_effluent_mg_l"], *_row_ph_t(r)) if pd.notna(r["no2_effluent_mg_l"]) else None,
+            axis=1,
         )
         fna = _stats(fna_series)
         highlights = []
         recs = []
         summary_text = _L(
-            f"Free nitrous acid (FNA, HNO₂-N) from NO₂ effluent: FNA = NO₂ / (1 + 10^(pH − pKa)), "
-            f"pH {fa_ph}, {fa_temp} °C (sidebar).",
-            f"由 NO₂ 出水估算游离亚硝酸 FNA（HNO₂-N）：FNA = NO₂ / (1 + 10^(pH − pKa))，"
-            f"侧边栏 pH {fa_ph}、{fa_temp} °C。",
+            "Free nitrous acid (FNA, mg HNO₂-N/L) from effluent NO₂ with pKa ≈ 3.3 (Anthonisen 1976).",
+            "由出水 NO₂ 估算游离亚硝酸 FNA（mg HNO₂-N/L，pKa ≈ 3.3，Anthonisen 1976）。",
         )
         if fna:
-            highlights.append(
-                MetricHighlight(
-                    label=_L("FNA (estimated)", "FNA（估算）"),
-                    value=f"{fna['latest']:.4f} mg/L",
-                    caption=_stat_caption(fna, decimals=4),
-                )
-            )
-            if fna["latest"] >= 0.02:
-                summary_text += " " + _L(
-                    "FNA may inhibit AOB at this level — review pH and nitrite control.",
-                    "当前 FNA 可能抑制 AOB — 请检查 pH 与亚硝酸盐控制。",
-                )
-                recs.append(_L("Lower pH or nitrite if AOB activity drops.", "若 AOB 活性下降，请考虑降低 pH 或 NO₂。"))
-            elif fna["latest"] >= 0.001:
-                recs.append(
-                    _L(
-                        "Monitor FNA if NO₂ accumulates during partial nitritation.",
-                        "若 NO₂ 在部分亚硝化中积累，请持续监控 FNA。",
-                    )
-                )
+            highlights.append(MetricHighlight(label=_L("FNA (estimated)", "FNA（估算）"),
+                                              value=f"{fna['latest']:.5f} mg N/L",
+                                              caption=_stat_caption(fna, decimals=5)))
+            if fna["latest"] >= 0.06:
+                summary_text += " " + _L("FNA above ~0.06 mg HNO₂-N/L (0.2 mg HNO₂/L) — nitrifier inhibition likely.",
+                                         "FNA 高于约 0.06 mg HNO₂-N/L — 硝化菌可能受抑制。")
+                recs.append(_L("Raise pH / lower nitrite if AOB activity drops.", "若 AOB 活性下降，请提高 pH 或降低亚硝酸盐。"))
+            elif fna["latest"] >= 0.01:
+                recs.append(_L("FNA in the range reported to inhibit NOB first (≥ ~0.01–0.02 mg HNO₂-N/L).",
+                               "FNA 处于优先抑制 NOB 的范围（≥ 约 0.01–0.02 mg HNO₂-N/L）。"))
             else:
-                recs.append(_L("FNA is low — typical for stable AOB activity at this pH.", "FNA 较低 — 在此 pH 下 AOB 通常较稳定。"))
-            recs.append(_L("Add measured pH and temperature columns for accurate FNA.", "请添加实测 pH 和温度列以获得准确 FNA。"))
-            sections.append(
-                SectionAdvice(
-                    section_id="fna",
-                    title=_L("Free nitrous acid (FNA)", "游离亚硝酸 (FNA)"),
-                    summary=summary_text,
-                    highlights=highlights,
-                    recommendations=recs,
-                )
-            )
+                recs.append(_L("FNA is low at this pH — no FNA inhibition expected.", "该 pH 下 FNA 较低 — 预计无 FNA 抑制。"))
+            sections.append(SectionAdvice(section_id="fna", title=_L("Free nitrous acid (FNA)", "游离亚硝酸 (FNA)"),
+                                          summary=summary_text, highlights=highlights, recommendations=recs))
 
     return sections

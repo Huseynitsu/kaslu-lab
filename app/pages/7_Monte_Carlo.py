@@ -1,73 +1,57 @@
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-from core.config import ExperimentConfig
-from core.simulation import simulate_30_days
 from core.ui.page_init import bootstrap_page, finish_page
-from core.ui.theme import apply_matplotlib_theme
 
 bootstrap_page(__file__, "monte_carlo", "Monte Carlo Analysis")
 
-st.title("Monte Carlo Risk Analysis")
-st.caption("Research module — synthetic random scenarios.")
+from core.pna_model import ReactorConfig, simulate  # noqa: E402
 
-n_runs = st.slider("Number of Simulations", 100, 1000, 300, step=100)
+st.title("Monte Carlo risk analysis — one-stage PN/A")
+st.caption("Propagates uncertainty in operating conditions through the uncalibrated mechanistic model.")
+
+c1, c2, c3 = st.columns(3)
+n_runs = c1.slider("Number of simulations", 50, 500, 200, 50)
+days = c2.slider("Horizon (d)", 20, 120, 60, 10)
+seed = c3.number_input("Random seed", 0, 10_000, 42)
+c1, c2, c3 = st.columns(3)
+do_mu = c1.number_input("DO mean (mg/L)", 0.05, 2.0, 0.3, 0.05)
+do_sd = c1.number_input("DO std", 0.0, 1.0, 0.1, 0.01)
+t_mu = c2.number_input("T mean (°C)", 10.0, 40.0, 30.0, 0.5)
+t_sd = c2.number_input("T std", 0.0, 10.0, 2.0, 0.5)
+nh4_mu = c3.number_input("Influent NH₄ mean (mg/L)", 10.0, 2000.0, 200.0, 10.0)
+nh4_sd = c3.number_input("Influent NH₄ std", 0.0, 500.0, 20.0, 5.0)
+ph_mu, ph_sd = 7.6, 0.2
 
 if st.button("Run Monte Carlo", type="primary"):
-    results = []
-    progress = st.progress(0)
-
-    for i in range(n_runs):
-        config = ExperimentConfig(
-            nh4=np.random.normal(50, 5),
-            no2=np.random.normal(66, 6),
-            ph=np.random.normal(7.8, 0.3),
-            temperature=np.random.normal(35, 2),
-            do=np.random.normal(0.8, 0.2),
-            x_anammox=np.random.normal(800, 100),
-            srt=np.random.normal(20, 3),
-        )
-        df = simulate_30_days(config)
-        final_row = df.iloc[-1]
-        stability = float(final_row["Stability"])
-        no3 = float(final_row["NO3"])
-        biomass = float(final_row["Biomass"])
-        final_nh4 = float(final_row["NH4"])
-        success = stability >= 0.8 and final_nh4 < 10
-        results.append({
-            "Final NO3": no3,
-            "Final Biomass": biomass,
-            "Stability": stability,
-            "Success": success,
+    rng = np.random.default_rng(int(seed))
+    samples = {
+        "do": np.clip(rng.normal(do_mu, do_sd, n_runs), 0.0, None),          # DO cannot be negative
+        "temperature": np.clip(rng.normal(t_mu, t_sd, n_runs), 5.0, 45.0),
+        "nh4_in": np.clip(rng.normal(nh4_mu, nh4_sd, n_runs), 1.0, None),
+        "ph": np.clip(rng.normal(ph_mu, ph_sd, n_runs), 6.0, 9.0),
+    }
+    with st.spinner("Simulating…"):
+        runs = simulate(ReactorConfig(days=days, dt_min=15.0), overrides=samples, record_every_d=5.0)
+    rows = []
+    for i, df in enumerate(runs):
+        last = df.iloc[-1]
+        rows.append({
+            "DO": samples["do"][i], "T": samples["temperature"][i], "NH4_in": samples["nh4_in"][i], "pH": samples["ph"][i],
+            "TIN removal (%)": last["TIN_removal_pct"], "ΔNO3/ΔNH4": last["dNO3_dNH4"], "NO2 out": last["NO2"],
         })
-        progress.progress((i + 1) / n_runs)
-
-    results_df = pd.DataFrame(results)
-    success_rate = results_df["Success"].mean() * 100
-    fail_rate = 100 - success_rate
-
-    st.subheader("Risk Summary")
-    col1, col2 = st.columns(2)
-    col1.metric("Success Rate (%)", round(success_rate, 2))
-    col2.metric("Failure Rate (%)", round(fail_rate, 2))
-
-    st.subheader("Stability Distribution")
-    st.bar_chart(results_df["Stability"])
-    st.subheader("NO3 Distribution")
-    st.bar_chart(results_df["Final NO3"])
-    st.subheader("Simulation Results")
-    st.dataframe(results_df, use_container_width=True)
-
-    apply_matplotlib_theme()
-    fig, ax = plt.subplots()
-    ax.hist(results_df["Stability"], bins=20)
-    st.pyplot(fig)
-    plt.close(fig)
-
-    st.metric("Mean Stability", round(results_df["Stability"].mean(), 3))
-    st.metric("Worst Stability", round(results_df["Stability"].min(), 3))
-    st.metric("Best Stability", round(results_df["Stability"].max(), 3))
+    res = pd.DataFrame(rows)
+    res["Success"] = (res["TIN removal (%)"] >= 75) & (res["NO2 out"] < 20) & (res["ΔNO3/ΔNH4"] < 0.15)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Success rate", f"{res['Success'].mean():.0%}", help="TIN ≥ 75 %, NO₂ < 20 mg N/L, ΔNO₃/ΔNH₄ < 0.15")
+    c2.metric("Median TIN removal", f"{res['TIN removal (%)'].median():.1f} %")
+    c3.metric("P10 TIN removal", f"{res['TIN removal (%)'].quantile(0.1):.1f} %")
+    st.subheader("Which input drives failure? (Spearman correlation with TIN removal)")
+    corr = res[["DO", "T", "NH4_in", "pH", "TIN removal (%)"]].corr(method="spearman")["TIN removal (%)"].drop("TIN removal (%)")
+    st.bar_chart(corr)
+    st.subheader("TIN removal vs DO")
+    st.scatter_chart(res, x="DO", y="TIN removal (%)", color="Success")
+    st.dataframe(res.round(3), use_container_width=True, hide_index=True)
 
 finish_page()

@@ -75,7 +75,11 @@ def build_rule_based_recommendations(result: OperationLogResult) -> list[str]:
                     )
                 )
 
-    if "tn_influent_mg_l" in schema.mapped_fields and "nh4_influent_mg_l" in schema.mapped_fields:
+    if (
+        "tn_influent_mg_l" in schema.mapped_fields
+        and "nh4_influent_mg_l" in schema.mapped_fields
+        and (df["tn_influent_mg_l"] - df["nh4_influent_mg_l"]).dropna().mean() > 1.0
+    ):
         recs.append(
             _L(
                 "TN influent is higher than NH₄ alone — monitor nitrite/nitrate fractions when those columns are added.",

@@ -25,6 +25,10 @@ NAV_GROUPS: dict[str, list[tuple[str, str, str]]] = {
         ("history", "History", "pages/6_Simulation_History.py"),
         ("advisor", "AI Advisor", "pages/7_AI_Advisor.py"),
     ],
+    "PN/A control": [
+        ("prediction", "Early Warning & Control", "pages/4_Prediction.py"),
+        ("twin", "PN/A Digital Twin", "pages/5_Hybrid_Predictor.py"),
+    ],
     "Lab tools": [
         ("pn", "PN Monitor", "pages/3_PN_Monitor.py"),
         ("stoich", "Stoichiometry", "pages/4_Stoichiometry.py"),
@@ -34,7 +38,6 @@ NAV_GROUPS: dict[str, list[tuple[str, str, str]]] = {
         ("exp_details", "Experiment Details", "pages/5_Experiment_Details.py"),
     ],
     "Research": [
-        ("prediction", "Hybrid / ML Prediction", "pages/4_Prediction.py"),
         ("optimization", "Optimization", "pages/9_Optimization.py"),
         ("monte_carlo", "Monte Carlo", "pages/7_Monte_Carlo.py"),
         ("comparison", "Comparison", "pages/4_Comparison.py"),
@@ -59,6 +62,7 @@ PAGE_I18N_KEYS: dict[str, str] = {
     "sensitivity": "nav.sensitivity",
     "exp_details": "nav.exp_details",
     "prediction": "nav.prediction",
+    "twin": "nav.twin",
     "optimization": "nav.optimization",
     "monte_carlo": "nav.monte_carlo",
     "comparison": "nav.comparison",
@@ -68,6 +72,7 @@ PAGE_I18N_KEYS: dict[str, str] = {
 
 GROUP_I18N_KEYS: dict[str, str] = {
     "Workflow": "nav.workflow",
+    "PN/A control": "nav.pna_control",
     "Lab tools": "nav.lab_tools",
     "Research": "nav.research",
     "Administration": "nav.admin",

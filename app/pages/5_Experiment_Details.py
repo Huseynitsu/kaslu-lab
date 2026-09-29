@@ -37,7 +37,7 @@ st.dataframe(parameters, use_container_width=True)
 
 st.subheader("Final Results")
 results = pd.DataFrame({
-    "Metric": ["Final NH4", "Final NO2", "Final NO3", "Final Biomass", "Stability"],
+    "Metric": ["Final NH4", "Final NO2", "Final NO3", "Final Biomass", "Performance index (model)"],
     "Value": [
         row["final_nh4"], row["final_no2"], row["final_no3"],
         row["final_biomass"], row["stability"],
@@ -55,7 +55,7 @@ st.subheader("Nitrogen Dynamics")
 st.line_chart(timeseries.set_index("day")[["nh4", "no2", "no3"]])
 st.subheader("Biomass")
 st.line_chart(timeseries.set_index("day")["biomass"])
-st.subheader("Stability")
+st.subheader("Performance index (model) — TIN removal / max, or NAR for PN")
 st.line_chart(timeseries.set_index("day")["stability"])
 st.subheader("Raw Timeseries Data")
 st.dataframe(timeseries, use_container_width=True)

@@ -53,11 +53,11 @@ st.dataframe(table_to_dataframe(table_from_json(row.get("lab_table_json"))), use
 if not timeseries.empty:
     st.subheader("Nitrogen dynamics")
     st.line_chart(timeseries.set_index("day")[["nh4", "no2", "no3"]])
-    st.subheader("Biomass / stability index")
+    st.subheader("Biomass / performance index (model)")
     st.line_chart(timeseries.set_index("day")[["biomass", "stability"]])
 
     results = pd.DataFrame({
-        "Metric": ["Final NH4", "Final NO2", "Final NO3", "Final biomass", "Stability"],
+        "Metric": ["Final NH4", "Final NO2", "Final NO3", "Final biomass", "Performance index (model)"],
         "Value": [
             row["final_nh4"], row["final_no2"], row["final_no3"],
             row["final_biomass"], row["stability"],

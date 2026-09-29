@@ -35,17 +35,18 @@ render_workflow_strip(
 )
 
 cards = [
+    (t("nav.prediction"), "ΔNO₃/ΔNH₄ · EWMA · DO control", "pages/4_Prediction.py", "go_ew"),
+    (t("nav.twin"), "One-stage PN/A model & controller test", "pages/5_Hybrid_Predictor.py", "go_twin"),
     (t("nav.operation_log"), "Excel · NH₄/TN · duration charts", "pages/2_Reactor_Operation_Log.py", "go_oplog"),
     (t("nav.sample"), "Dilution helper + lab notebook", "pages/2_Sample_Analysis.py", "go_analysis"),
     (t("nav.simulation"), "Compare all sample points", "pages/1_Simulation.py", "go_sim"),
     (t("nav.pn"), "NOB risk & PN checks", "pages/3_PN_Monitor.py", "go_pn"),
-    (t("nav.stoich"), "NH₄:NO₂ = 1:1.32", "pages/4_Stoichiometry.py", "go_stoich"),
+    (t("nav.stoich"), "Strous / Lotti · feed & PN/A ratios", "pages/4_Stoichiometry.py", "go_stoich"),
     (t("nav.history"), "Saved simulations & charts", "pages/6_Simulation_History.py", "go_hist"),
 ]
 
-row1 = st.columns(3)
-row2 = st.columns(3)
-for col, (title, desc, path, key) in zip(row1 + row2, cards):
+grid = st.columns(3) + st.columns(3) + st.columns(3)
+for col, (title, desc, path, key) in zip(grid, cards):
     with col:
         render_module_card(title, desc, path, key)
 

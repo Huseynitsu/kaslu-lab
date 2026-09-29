@@ -32,7 +32,7 @@ def generate_pdf(row, filename):
     <b>Final NO2:</b> {row['final_no2']:.3f}<br/>
     <b>Final NO3:</b> {row['final_no3']:.3f}<br/>
     <b>Final Biomass:</b> {row['final_biomass']:.3f}<br/>
-    <b>Stability:</b> {row['stability']:.3f}<br/>
+    <b>Performance index (model):</b> {row['stability']:.3f}<br/>
     """
 
     content.append(
@@ -47,12 +47,20 @@ def generate_pdf(row, filename):
 
     stability = row["stability"]
 
-    if stability > 0.9:
-        interpretation = "Reactor shows HIGH stability and optimal Anammox performance."
-    elif stability > 0.7:
-        interpretation = "Reactor is moderately stable with some inhibitory conditions."
+    stage = str(row.get("stage", "anammox") or "anammox")
+    if stage == "pn":
+        what = "nitrite accumulation ratio (NAR) predicted by the model"
     else:
-        interpretation = "Reactor is unstable and microbial activity is significantly inhibited."
+        what = "predicted TIN removal relative to the autotrophic maximum (≈89 %)"
+    if stability > 0.9:
+        level = "close to the theoretical optimum"
+    elif stability > 0.7:
+        level = "moderately below the optimum"
+    else:
+        level = "well below the optimum — check operating conditions"
+    interpretation = (f"The index ({stability:.2f}) is the {what}; it is {level}. "
+                      "This is an uncalibrated model result, not a measured stability — "
+                      "confirm with laboratory data (TIN removal, ΔNO3/ΔNH4).")
 
     content.append(
         Paragraph(

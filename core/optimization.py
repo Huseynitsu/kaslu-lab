@@ -1,212 +1,53 @@
-from core.config import ExperimentConfig
-from core.simulation import simulate_30_days
+"""
+Model-based operating-point search for one-stage PN/A (uncalibrated model!).
+
+Objective: maximise the nitrogen removal RATE (NRR) subject to TIN removal ≥ target,
+effluent NO2 < limit and ΔNO3/ΔNH4 < limit; ties → lowest DO (aeration energy).
+Evaluated over the last 10 days of the horizon (vectorised grid search over DO × HRT).
+"""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import numpy as np
+import pandas as pd
+
+from core.constants import PNA_NO2_EFFLUENT_WARNING, PNA_NO3_RATIO_WARNING
+from core.pna_model import ReactorConfig, simulate
 
 
-def optimize_reactor():
+def evaluate_grid(base: ReactorConfig, do_values, hrt_values_d, days: int = 60) -> pd.DataFrame:
+    dd, hh = np.meshgrid(np.asarray(do_values, float), np.asarray(hrt_values_d, float))
+    dd, hh = dd.ravel(), hh.ravel()
+    runs = simulate(replace(base, days=days, dt_min=15.0), overrides={"do": dd, "hrt_d": hh}, record_every_d=5.0)
+    rows = []
+    for do, hrt, df in zip(dd, hh, runs):
+        tail = df[df["Day"] >= days - 10]
+        rows.append({
+            "DO (mg/L)": do,
+            "HRT (h)": hrt * 24.0,
+            "NLR (kg N/m3/d)": float(tail["NLR"].mean()),
+            "TIN removal (%)": float(tail["TIN_removal_pct"].mean()),
+            "NRR (kg N/m3/d)": float(tail["NRR"].mean()),
+            "ΔNO3/ΔNH4": float(tail["dNO3_dNH4"].mean()),
+            "Effluent NO2 (mg N/L)": float(tail["NO2"].max()),
+        })
+    return pd.DataFrame(rows)
 
-    best_score = -999999
 
-    best_result = None
-
-    for ph in [
-
-        7.0,
-        7.2,
-        7.4,
-        7.6,
-        7.8,
-        8.0
-
-    ]:
-
-        for temperature in [
-
-            25,
-            28,
-            30,
-            32,
-            35,
-            38,
-            40
-
-        ]:
-
-            for do in [
-
-                0.1,
-                0.2,
-                0.3,
-                0.5,
-                0.8
-
-            ]:
-
-                for biomass in [
-
-                    300,
-                    500,
-                    800,
-                    1200,
-                    1500
-
-                ]:
-
-                    for srt in [
-
-                        15,
-                        20,
-                        25,
-                        30,
-                        35
-
-                    ]:
-
-                        config = ExperimentConfig(
-
-                            nh4=50,
-                            no2=66,
-                            hco3=120,
-
-                            ph=ph,
-                            temperature=temperature,
-                            do=do,
-
-                            x_anammox=biomass,
-
-                            srt=srt
-                        )
-
-                        df = simulate_30_days(
-                            config
-                        )
-
-                        final = df.iloc[-1]
-
-                        # ==================================
-                        # PERFORMANCE INDICATORS
-                        # ==================================
-
-                        nh4_removal = (
-
-                            (
-                                config.nh4 -
-                                final["NH4"]
-                            )
-                            /
-                            config.nh4
-
-                        )
-
-                        no2_removal = (
-
-                            (
-                                config.no2 -
-                                final["NO2"]
-                            )
-                            /
-                            config.no2
-
-                        )
-
-                        stability = (
-                            final["Stability"]
-                        )
-
-                        no3_penalty = (
-
-                            final["NO3"]
-                            /
-                            max(
-                                config.nh4,
-                                1
-                            )
-
-                        )
-
-                        # ==================================
-                        # OBJECTIVE FUNCTION
-                        # ==================================
-
-                        score = (
-
-                            nh4_removal * 0.40 +
-
-                            no2_removal * 0.30 +
-
-                            stability * 0.25 -
-
-                            no3_penalty * 0.05
-
-                        )
-
-                        if score > best_score:
-
-                            best_score = score
-
-                            best_result = {
-
-                                "Score":
-                                    round(
-                                        score,
-                                        4
-                                    ),
-
-                                "pH":
-                                    ph,
-
-                                "Temperature":
-                                    temperature,
-
-                                "DO":
-                                    do,
-
-                                "Biomass":
-                                    biomass,
-
-                                "SRT":
-                                    srt,
-
-                                "NH4 Removal":
-                                    round(
-                                        nh4_removal,
-                                        4
-                                    ),
-
-                                "NO2 Removal":
-                                    round(
-                                        no2_removal,
-                                        4
-                                    ),
-
-                                "Final NH4":
-                                    round(
-                                        final["NH4"],
-                                        4
-                                    ),
-
-                                "Final NO2":
-                                    round(
-                                        final["NO2"],
-                                        4
-                                    ),
-
-                                "Final NO3":
-                                    round(
-                                        final["NO3"],
-                                        4
-                                    ),
-
-                                "Final Biomass":
-                                    round(
-                                        final["Biomass"],
-                                        4
-                                    ),
-
-                                "Stability":
-                                    round(
-                                        stability,
-                                        4
-                                    )
-                            }
-
-    return best_result
+def optimize_reactor(base: ReactorConfig | None = None, do_values=None, hrt_values_h=None, days: int = 60,
+                     no2_limit: float = PNA_NO2_EFFLUENT_WARNING, ratio_limit: float = PNA_NO3_RATIO_WARNING,
+                     min_tin_removal: float = 80.0) -> dict:
+    base = base or ReactorConfig()
+    do_values = do_values if do_values is not None else [0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0]
+    hrt_values_h = hrt_values_h if hrt_values_h is not None else [8, 12, 24, 36, 48]
+    grid = evaluate_grid(base, do_values, np.asarray(hrt_values_h, float) / 24.0, days)
+    feasible = grid[(grid["Effluent NO2 (mg N/L)"] < no2_limit) & (grid["ΔNO3/ΔNH4"] < ratio_limit)
+                    & (grid["TIN removal (%)"] >= min_tin_removal)]
+    if feasible.empty:
+        best = grid.sort_values("TIN removal (%)", ascending=False).iloc[0]
+    else:
+        best = feasible.assign(_nrr=feasible["NRR (kg N/m3/d)"].round(3)).sort_values(
+            ["_nrr", "DO (mg/L)"], ascending=[False, True]).iloc[0].drop("_nrr")
+    return {"best": best.to_dict(), "feasible": not feasible.empty, "grid": grid}

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from core.constants import ANAMMOX_DO_MAX, PN_DO_MAX, PN_DO_MIN
+from core.constants import ANAMMOX_DO_MAX, ANAMMOX_NO3_PER_NH4
 from core.diagnostics import interpret_daily_reading
 from core.lab_table import table_from_json, selected_columns_from_json, SAMPLE_COLUMNS
 from core.pn_control import assess_pn_operation
@@ -59,7 +59,22 @@ def analyze_experiment(row: pd.Series, timeseries: pd.DataFrame | None = None) -
         )
     )
 
-    if stage == "pn":
+    if stage == "pna":
+        assessment = assess_pn_operation(do, temp, ph, srt, nh4, no2, mode="pna")
+        findings.extend([c.message for c in assessment.checks if c.status != "ok"])
+        recommendations.extend(assessment.recommendations)
+        status = assessment.overall_status
+        try:
+            ent = {k: float(lab_table[k]["entrance"]) for k in ("nh4", "no2", "no3")}
+            diag = interpret_daily_reading(nh4, no2, no3_init, ent["nh4"], ent["no2"], ent["no3"], stage="pna")
+            findings.extend(diag.findings)
+            recommendations.extend(diag.actions)
+            if diag.status == "danger" or (diag.status == "warning" and status == "ok"):
+                status = diag.status
+        except (KeyError, TypeError, ValueError):
+            findings.append("Entrance values missing — in/out indicators not available.")
+        summary = f"One-stage PN/A experiment — performance index (TIN removal / 88.8 %): {stability:.2f}"
+    elif stage == "pn":
         assessment = assess_pn_operation(do, temp, ph, srt, nh4, no2)
         findings.extend([c.message for c in assessment.checks if c.status != "ok"])
         recommendations.extend(assessment.recommendations)
@@ -91,7 +106,7 @@ def analyze_experiment(row: pd.Series, timeseries: pd.DataFrame | None = None) -
         no3_gain = final_no3 - no3_init
 
         if nh4_removed > 0.5 and no2_removed > 0.5:
-            expected_no3 = nh4_removed * 0.26
+            expected_no3 = nh4_removed * ANAMMOX_NO3_PER_NH4
             if no3_gain <= expected_no3 * 1.5:
                 findings.append(
                     f"NH₄ and NO₂ decreased; NO₃ gain ({no3_gain:.1f} mg/L) matches intrinsic Anammox (~{expected_no3:.1f})."
@@ -101,13 +116,13 @@ def analyze_experiment(row: pd.Series, timeseries: pd.DataFrame | None = None) -
                 status = "danger"
 
         findings.append(intrinsic_no3_note())
-        summary = f"Anammox experiment — stability index: {stability:.2f}"
+        summary = f"Anammox experiment — performance index (TIN removal / theoretical max): {stability:.2f}"
 
         if stability < 0.5:
             recommendations.append("Improve NH₄:NO₂ ratio (1:1.32), biomass, or reduce DO.")
             status = "warning" if status == "ok" else status
 
-    if timeseries is not None and len(timeseries) >= 2:
+    if timeseries is not None and len(timeseries) >= 2 and stage != "pna":
         first = timeseries.iloc[0]
         last = timeseries.iloc[-1]
         diag = interpret_daily_reading(
