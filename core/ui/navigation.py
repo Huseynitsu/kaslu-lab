@@ -33,7 +33,18 @@ def resolve_page_path(page: str) -> str:
 
 
 def switch_to(page_path: str) -> None:
-    st.switch_page(resolve_page_path(page_path))
+    target = resolve_page_path(page_path)
+    try:
+        st.switch_page(target)
+    except st.errors.StreamlitAPIException:
+        # Page registry is built at server start; on Streamlit Cloud a stale
+        # process may not know pages/ shims added later (fix: Reboot app).
+        st.error(
+            f"Page `{target}` is not registered in this running app. "
+            "If you deployed new pages, reboot the app (Manage app → ⋮ → Reboot app); "
+            "after adding pages run `python scripts/sync_root_pages.py`."
+        )
+        st.stop()
 
 
 def navigate_to(page_path: str) -> None:
