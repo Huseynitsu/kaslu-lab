@@ -36,7 +36,7 @@ row1 = df1.iloc[0]
 row2 = df2.iloc[0]
 
 comparison = pd.DataFrame({
-    "Metric": ["Final NH4", "Final NO2", "Final NO3", "Final Biomass", "Stability"],
+    "Metric": ["Final NH4", "Final NO2", "Final NO3", "Final Biomass", "Performance index (model)"],
     f"Experiment {exp1}": [
         row1["final_nh4"],
         row1["final_no2"],

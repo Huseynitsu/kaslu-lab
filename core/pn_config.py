@@ -3,10 +3,7 @@ from dataclasses import dataclass
 
 @dataclass
 class PNConfig:
-
-    # ==========================
-    # INFLUENT NITROGEN
-    # ==========================
+    """Partial nitritation (two-stage, suspended sludge). ``hrt_days<=0`` → batch."""
 
     nh4: float = 100.0
     no2: float = 0.0
@@ -15,21 +12,12 @@ class PNConfig:
     x_aob: float = 150.0
     x_nob: float = 50.0
 
-    # ==========================
-    # REACTOR CONDITIONS
-    # ==========================
-
     ph: float = 7.8
-
     temperature: float = 35.0
-
     do: float = 0.8
 
-    # ==========================
-    # RETENTION
-    # ==========================
-
-    srt: float = 5.0
+    srt: float = 2.0
 
     influent_nh4: float = 0.0
     hrt_days: float = 0.0
+    days: int = 30

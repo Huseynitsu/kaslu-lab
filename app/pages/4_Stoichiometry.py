@@ -16,17 +16,22 @@ if st.session_state.get("user_id") is None:
     switch_to("Home.py")
     st.stop()
 
-from core.constants import ANAMMOX_NO2_PER_NH4, ANAMMOX_NO3_PER_NH4
+from core.constants import LOTTI_2014, STROUS_1998, pna_max_tn_removal, pna_no3_per_nh4_removed
 from core.stoichiometry import check_anammox_feed, intrinsic_no3_note
 
 render_app_chrome("stoich")
 
-st.title("⚖️ Stoichiometry — Strous Equation")
-st.markdown("""
-**Full Anammox equation** (Strous et al., 1998):
-
-`NH₄⁺ + 1.32 NO₂⁻ + 0.066 HCO₃⁻ → 1.02 N₂ + 0.26 NO₃⁻ + biomass + H₂O`
-""")
+st.title("⚖️ Stoichiometry — anammox & one-stage PN/A")
+eq = st.radio("Stoichiometry", ["strous_1998", "lotti_2014"], horizontal=True,
+              format_func=lambda k: "Strous et al. 1998" if k == "strous_1998" else "Lotti et al. 2014")
+S = STROUS_1998 if eq == "strous_1998" else LOTTI_2014
+if eq == "strous_1998":
+    st.markdown("`NH₄⁺ + 1.32 NO₂⁻ + 0.066 HCO₃⁻ + 0.13 H⁺ → 1.02 N₂ + 0.26 NO₃⁻ + 0.066 CH₂O₀.₅N₀.₁₅ + 2.03 H₂O`")
+else:
+    st.markdown("`NH₄⁺ + 1.146 NO₂⁻ + 0.071 HCO₃⁻ + 0.057 H⁺ → 0.986 N₂ + 0.161 NO₃⁻ + 0.071 CH₁.₇₄O₀.₃₁N₀.₂₀ + 2.002 H₂O`")
+    st.caption("Lotti et al. (2014) Water Res. 60:1–14 — verify coefficients against the paper before citing.")
+st.caption("H⁺ is CONSUMED → anammox raises pH (alkalinity is produced, not buffered). "
+           "1.32 is a molar ratio (mol NO₂ per mol NH₄), not a rate.")
 
 col1, col2 = st.columns(2)
 
@@ -40,7 +45,7 @@ with col2:
     tolerance = st.slider("Ratio tolerance (%)", 5, 30, 15)
 
 if st.button("Check feed", type="primary"):
-    result = check_anammox_feed(nh4, no2, no3, hco3, ratio_tolerance_pct=tolerance)
+    result = check_anammox_feed(nh4, no2, no3, hco3, ratio_tolerance_pct=tolerance, stoichiometry=eq)
 
     if result.ready_for_anammox:
         st.success("✅ Effluent is READY for the Anammox stage")
@@ -65,11 +70,18 @@ if st.button("Check feed", type="primary"):
     st.info(intrinsic_no3_note())
 
 st.divider()
+st.subheader("One-stage PN/A — derived ratios")
+r = pna_no3_per_nh4_removed(S)
+c1, c2, c3 = st.columns(3)
+c1.metric("NH₄ removed per NH₄ used by anammox", f"{1 + S['no2_per_nh4']:.3f}")
+c2.metric("ΔNO₃/ΔNH₄ (theory)", f"{r:.3f}")
+c3.metric("Max TIN removal (autotrophic)", f"{pna_max_tn_removal(S):.1%}")
+st.caption("ΔNO₃/ΔNH₄ well above this value → NOB activity; well below → heterotrophic denitrification.")
+
 st.subheader("Reference coefficients")
 st.table({
-    "Component": ["NO₂⁻ / NH₄⁺", "NO₃⁻ / NH₄⁺ (intrinsic)", "HCO₃⁻ / NH₄⁺ (mass basis)"],
-    "Strous (mol)": [f"{ANAMMOX_NO2_PER_NH4}", f"{ANAMMOX_NO3_PER_NH4}", "0.066"],
-    "Code (mg/L)": [f"{ANAMMOX_NO2_PER_NH4}", f"{ANAMMOX_NO3_PER_NH4}", "0.287"],
+    "Component": ["NO₂⁻ / NH₄⁺", "NO₃⁻ / NH₄⁺ (anammox)", "HCO₃⁻ / NH₄⁺ (mol)", "HCO₃⁻ / NH₄-N (mg/mg)"],
+    "Value": [f"{S['no2_per_nh4']}", f"{S['no3_per_nh4']}", f"{S['hco3_per_nh4']}", f"{S['hco3_per_nh4'] * 61 / 14:.3f}"],
 })
 
 render_sidebar_footer()

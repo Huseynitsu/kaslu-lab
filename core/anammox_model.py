@@ -1,77 +1,56 @@
-import math
+"""
+Anammox-stage helpers (backward-compatible API) built on the unit-consistent PN/A model.
+
+Bug fixed (2026-09): the previous version multiplied a specific rate (g N/g VSS/d) by biomass
+in g/L but subtracted the result from concentrations in mg/L, so anammox conversion was
+~1000× too slow (800 mg VSS/L removed only ~0.4 mg NH4-N/L per day).
+"""
+
+from __future__ import annotations
+
+
 
 from core.constants import ANAMMOX_HCO3_MASS_PER_NH4, ANAMMOX_NO2_PER_NH4, ANAMMOX_NO3_PER_NH4
+from core.pna_model import KineticParameters, ReactorConfig, growth_rates, simulate
 
 
 def mechanistic_prediction(nh4, no2):
-    """Expected intrinsic NO3 production from Strous stoichiometry."""
+    """Expected intrinsic NO3 production (mg N/L) if the limiting substrate is fully used [1]."""
     nh4_available = min(nh4, no2 / ANAMMOX_NO2_PER_NH4)
-    return nh4_available * ANAMMOX_NO3_PER_NH4
+    return max(nh4_available, 0.0) * ANAMMOX_NO3_PER_NH4
 
 
-def full_anammox_model(
-    nh4,
-    no2,
-    no3,
-    hco3,
-    ph,
-    temperature,
-    do,
-    x_anammox,
-    srt,
-):
-    DT = 1.0
+def environmental_activity(ph: float, temperature: float, do: float, params: KineticParameters | None = None) -> float:
+    """Relative anammox activity (0–1) from T, pH and DO only (substrate-saturated)."""
+    p = params or KineticParameters()
+    _, _, mu_x = growth_rates(1e6, p.k_no2_amx * 20, do, ph, temperature, p)
+    _, _, mu_ref = growth_rates(1e6, p.k_no2_amx * 20, 0.0, p.ph_opt_amx, 35.0, p)
+    return float(min(max(float(mu_x) / float(mu_ref), 0.0), 1.0))
 
-    MU_MAX = 0.08
-    K_NH4 = 0.5
-    K_NO2 = 0.5
-    KI_DO = 0.2
 
-    Y = 0.11
-    DECAY = 0.002
-
-    ph_factor = math.exp(-((ph - 7.8) ** 2) / (2 * (0.4 ** 2)))
-
-    temp_factor = math.exp(-((temperature - 35) ** 2) / (2 * (5 ** 2)))
-
-    do_factor = KI_DO / (KI_DO + do)
-
-    activity = max(0.0, min(ph_factor * temp_factor * do_factor, 1.0))
-
-    monod_nh4 = nh4 / (K_NH4 + nh4)
-    monod_no2 = no2 / (K_NO2 + no2)
-
-    biomass_g = x_anammox / 1000.0
-
-    # Specific uptake based on Strous kinetics [1][2]
-    q_nh4 = (MU_MAX / Y) * monod_nh4 * monod_no2 * activity
-    nh4_consumed = q_nh4 * biomass_g * DT
-
-    max_nh4_possible = min(
-        nh4,
-        no2 / ANAMMOX_NO2_PER_NH4,
-        hco3 / ANAMMOX_HCO3_MASS_PER_NH4,
+def anammox_reactor_config(nh4, no2, no3, ph, temperature, do, x_anammox, srt, *, days=1,
+                           hrt_d=None, nh4_in=None, no2_in=None, no3_in=0.0) -> ReactorConfig:
+    return ReactorConfig(
+        nh4=nh4, no2=no2, no3=no3,
+        nh4_in=nh4_in if nh4_in is not None else nh4,
+        no2_in=no2_in if no2_in is not None else no2,
+        no3_in=no3_in,
+        hrt_d=hrt_d, ph=ph, temperature=temperature, do=do,
+        x_aob=1e-6, x_nob=1e-6, x_amx=x_anammox,
+        srt_floc=1e9, srt_amx=max(float(srt), 1e-3), days=days,
     )
 
-    nh4_consumed = min(nh4_consumed, max_nh4_possible)
 
-    biomass_growth = Y * nh4_consumed
-
-    no2_consumed = nh4_consumed * ANAMMOX_NO2_PER_NH4
-    no3_produced = nh4_consumed * ANAMMOX_NO3_PER_NH4
-    hco3_consumed = nh4_consumed * ANAMMOX_HCO3_MASS_PER_NH4
-
-    nh4_new = max(nh4 - nh4_consumed, 0)
-    no2_new = max(no2 - no2_consumed, 0)
-    no3_new = no3 + no3_produced
-    hco3_new = max(hco3 - hco3_consumed, 0)
-
-    biomass_decay = DECAY * x_anammox
-    x_new = x_anammox + biomass_growth - biomass_decay
-
-    if srt < 15:
-        x_new *= srt / 15
-
-    x_new = max(x_new, 10)
-
-    return nh4_new, no2_new, no3_new, hco3_new, x_new, activity
+def full_anammox_model(nh4, no2, no3, hco3, ph, temperature, do, x_anammox, srt):
+    """
+    Advance an anammox BATCH by one day.
+    Returns (nh4, no2, no3, hco3, biomass, activity) — same signature as before.
+    """
+    cfg = anammox_reactor_config(nh4, no2, no3, ph, temperature, do, x_anammox, srt, days=1)
+    last = simulate(cfg).iloc[-1]
+    nh4_used = max(nh4 - last["NH4"], 0.0)
+    hco3_new = max(hco3 - nh4_used * ANAMMOX_HCO3_MASS_PER_NH4, 0.0)
+    return (
+        float(last["NH4"]), float(last["NO2"]), float(last["NO3"]), float(hco3_new),
+        float(last["AMX"]), environmental_activity(ph, temperature, do),
+    )

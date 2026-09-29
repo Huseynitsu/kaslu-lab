@@ -15,7 +15,7 @@ st.set_page_config(
 st.title("🧪 Anammox Hybrid Reactor Dashboard")
 
 st.markdown("""
-Simulate nitrogen removal process in a biological reactor (lab-scale model).
+Legacy single-page demo (anammox batch). The maintained app is app/Home.py.
 """)
 
 # Sidebar
@@ -25,7 +25,7 @@ nh4 = st.sidebar.slider("NH4 (mg/L)", 0, 200, 50)
 no2 = st.sidebar.slider("NO2 (mg/L)", 0, 200, 66)
 ph = st.sidebar.slider("pH", 5.0, 9.0, 7.8)
 temperature = st.sidebar.slider("Temperature (°C)", 10, 45, 35)
-do = st.sidebar.slider("DO (mg/L)", 0.0, 5.0, 0.8)
+do = st.sidebar.slider("DO (mg/L)", 0.0, 1.0, 0.05)
 x_anammox = st.sidebar.slider("Biomass", 100, 2000, 800)
 srt = st.sidebar.slider("SRT (days)", 1, 40, 20)
 
@@ -65,23 +65,3 @@ if st.button("▶ Run Simulation"):
 
     st.subheader("📊 Raw Data")
     st.dataframe(df)
-    
-    from core.dataset_builder import build_dataset, save_dataset
-
-
-df = build_dataset(n_samples=200)
-
-save_dataset(df)
-
-from core.train import train_pipeline
-
-model = train_pipeline()
-
-from core.anammox_model import mechanistic_prediction
-
-no3 = mechanistic_prediction(
-    nh4=50,
-    no2=66
-)
-
-print("NO3:", no3)

@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 
 from core.constants import (
-    ANAMMOX_HCO3_MASS_PER_NH4,
-    ANAMMOX_IDEAL_RATIO,
     ANAMMOX_INTRINSIC_NO3_FRACTION,
-    ANAMMOX_NO2_PER_NH4,
     ANAMMOX_NO3_PER_NH4,
+    DEFAULT_STOICHIOMETRY,
+    STOICHIOMETRY_SETS,
 )
 
 
@@ -32,10 +31,19 @@ def check_anammox_feed(
     no3_mg_l: float = 0.0,
     hco3_mg_l: float | None = None,
     ratio_tolerance_pct: float = 15.0,
+    stoichiometry: str = DEFAULT_STOICHIOMETRY,
 ) -> StoichiometryResult:
     """
-    Check if PN effluent meets Strous stoichiometry for anammox feed.
+    Check whether a two-stage PN effluent suits an anammox reactor feed.
+
+    Not applicable to the bulk liquid of a ONE-STAGE PN/A reactor (there, NO2 is consumed as
+    it is produced; use ΔNO3/ΔNH4 and TN removal instead — see core.early_warning).
     """
+    st_ = STOICHIOMETRY_SETS[stoichiometry]
+    ANAMMOX_NO2_PER_NH4 = st_["no2_per_nh4"]
+    ANAMMOX_NO3_PER_NH4 = st_["no3_per_nh4"]
+    ANAMMOX_IDEAL_RATIO = ANAMMOX_NO2_PER_NH4
+    ANAMMOX_HCO3_MASS_PER_NH4 = st_["hco3_per_nh4"] * 61.0 / 14.0
     messages = []
 
     if nh4_mg_l <= 0 and no2_mg_l <= 0:
@@ -101,9 +109,9 @@ def check_anammox_feed(
             f"Ratio is close to ideal ({ratio:.2f} ≈ {ANAMMOX_IDEAL_RATIO:.2f})."
         )
 
-    if no3_mg_l > expected_no3 * 2 and nh4_mg_l > 5:
+    if no3_mg_l > 0 and no2_mg_l > 0 and no3_mg_l / max(nh4_mg_l + no2_mg_l, 1e-9) > 0.15:
         messages.append(
-            "NO₃ may exceed intrinsic Anammox levels — check for NOB activity."
+            "Feed already carries notable NO₃ relative to NH₄+NO₂ — NOB may be active in the PN stage."
         )
 
     return StoichiometryResult(
@@ -126,6 +134,7 @@ def check_anammox_feed(
 def intrinsic_no3_note() -> str:
     pct = ANAMMOX_INTRINSIC_NO3_FRACTION * 100
     return (
-        f"Anammox intrinsically converts ~{pct:.0f}% of input nitrogen to NO₃⁻ "
-        f"(Strous: {ANAMMOX_NO3_PER_NH4} mol NO₃ / mol NH₄)."
+        f"Anammox converts ~{pct:.0f}% of the consumed nitrogen (NH₄ + NO₂) to NO₃⁻ "
+        f"(Strous: {ANAMMOX_NO3_PER_NH4} mol NO₃ per mol NH₄, i.e. 0.26 / 2.32). "
+        "In one-stage PN/A this appears as ΔNO₃/ΔNH₄ ≈ 0.11."
     )

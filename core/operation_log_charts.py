@@ -19,8 +19,8 @@ CHART_SERIES_LABELS = {
     "loading_influent_g_n_l_d": ("Influent loading", "进水负荷"),
     "anr_r1_g_n_l_d": ("ANR R1", "R1 ANR"),
     "anr_r2_g_n_l_d": ("ANR R2", "R2 ANR"),
-    "fa": ("FA (estimated)", "FA（估算）"),
-    "fna": ("FNA (estimated)", "FNA（估算）"),
+    "fa": ("FA (mg NH₃/L)", "FA（mg NH₃/L）"),
+    "fna": ("FNA (mg HNO₂-N/L)", "FNA（mg HNO₂-N/L）"),
 }
 
 TABLE_COLUMN_LABELS = {

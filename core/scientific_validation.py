@@ -1,31 +1,37 @@
 """
-Scientific validation helpers for Anammox research models.
+Scientific validation — checks of the code against INDEPENDENT literature benchmarks.
 
-References:
-  [1][2] Strous et al. — Anammox stoichiometry and kinetics
-  [3] Hellinga et al. — PN operational ranges
-  [4] Anthonisen et al. — FA/FNA inhibition
-  [6] Pollice et al. — NOB washout (SRT < 5 d)
+Two kinds of checks (reported separately, do not confuse them):
+  * verification — the code implements the equations correctly (closed forms, mass balance);
+  * literature benchmarks — model behaviour agrees with published facts (qualitative/semi-quantitative).
+Neither replaces calibration/validation with YOUR reactor data (see docs/SCIENCE.md, §Validation plan).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 
-from core.anammox_model import full_anammox_model, mechanistic_prediction
-from core.config import ExperimentConfig
-from core.constants import (
-    ANAMMOX_IDEAL_RATIO,
-    ANAMMOX_NO2_PER_NH4,
-    ANAMMOX_NO3_PER_NH4,
-    ANAMMOX_DO_MAX,
+from core.chemistry import (
+    anthonisen_fa_closed_form,
+    anthonisen_fna_closed_form,
+    free_ammonia_as_molecule,
+    free_nitrous_acid_as_molecule,
+    pka_ammonia,
+    pka_nitrous_acid,
 )
+from core.constants import (
+    ANAMMOX_INTRINSIC_NO3_FRACTION,
+    LOTTI_2014,
+    PNA_MAX_TN_REMOVAL,
+    PNA_NO3_PER_NH4_REMOVED,
+    STROUS_1998,
+)
+from core.dilution import calculate_dilution, fit_calibration
+from core.early_warning import first_detection_day, run_early_warning
 from core.lab_table import default_table
 from core.multi_column_analysis import analyze_multi_column
-from core.pn_config import PNConfig
-from core.pn_model import partial_nitritation_step
-from core.pn_simulation import simulate_pn_30_days
-from core.simulation import simulate_30_days
+from core.pna_model import KineticParameters, ReactorConfig, simulate
 from core.stoichiometry import check_anammox_feed
 
 
@@ -37,6 +43,7 @@ class ValidationCheck:
     actual: str
     reference: str = ""
     severity: str = "critical"  # critical | warning | info
+    kind: str = "verification"  # verification | benchmark
 
 
 @dataclass
@@ -54,399 +61,164 @@ class ScientificReport:
 
     @property
     def score_pct(self) -> float:
-        if not self.checks:
-            return 100.0
-        return 100.0 * self.passed_count / self.total
+        return 100.0 if not self.checks else 100.0 * self.passed_count / self.total
 
     @property
     def all_critical_passed(self) -> bool:
         return all(c.passed for c in self.checks if c.severity == "critical")
 
 
-def _check(name, passed, expected, actual, reference="", severity="critical") -> ValidationCheck:
-    return ValidationCheck(name, passed, expected, actual, reference, severity)
+def _check(name, passed, expected, actual, reference="", severity="critical", kind="verification"):
+    return ValidationCheck(name, bool(passed), expected, actual, reference, severity, kind)
 
 
-def validate_strous_constants() -> ScientificReport:
-    report = ScientificReport("Strous stoichiometry constants")
-    report.checks.append(_check(
-        "NO2/NH4 stoichiometric ratio",
-        ANAMMOX_NO2_PER_NH4 == 1.32,
-        "1.32",
-        str(ANAMMOX_NO2_PER_NH4),
-        "[1][2] Strous",
-    ))
-    report.checks.append(_check(
-        "Intrinsic NO3/NH4 ratio",
-        abs(ANAMMOX_NO3_PER_NH4 - 0.26) < 1e-9,
-        "0.26",
-        str(ANAMMOX_NO3_PER_NH4),
-        "[1][2] Strous",
-    ))
-    report.checks.append(_check(
-        "Ideal feed ratio equals NO2/NH4 coeff",
-        ANAMMOX_IDEAL_RATIO == ANAMMOX_NO2_PER_NH4,
-        "equal",
-        f"{ANAMMOX_IDEAL_RATIO} vs {ANAMMOX_NO2_PER_NH4}",
-        "[1][2] Strous",
-    ))
-    return report
+def _rel(a, b):
+    return abs(a - b) / max(abs(b), 1e-12)
 
 
-def validate_stoichiometry_feed() -> ScientificReport:
-    report = ScientificReport("Anammox feed stoichiometry")
-
-    ideal = check_anammox_feed(50.0, 66.0, 0.0, 120.0, ratio_tolerance_pct=15.0)
-    report.checks.append(_check(
-        "Ideal PN effluent (50/66) ready for Anammox",
-        ideal.ready_for_anammox,
-        "ready=True",
-        f"ready={ideal.ready_for_anammox}, ratio={ideal.no2_nh4_ratio:.2f}",
-        "[1][2] NO2/NH4 = 1.32",
-    ))
-
-    low_no2 = check_anammox_feed(50.0, 30.0, 0.0, 120.0)
-    report.checks.append(_check(
-        "Low NO2 feed not ready",
-        not low_no2.ready_for_anammox,
-        "ready=False",
-        f"ready={low_no2.ready_for_anammox}, ratio={low_no2.no2_nh4_ratio:.2f}",
-        "[1][2] ratio < 1.32",
-    ))
-
-    mech_no3 = mechanistic_prediction(50.0, 66.0)
-    reactive = min(50.0, 66.0 / ANAMMOX_NO2_PER_NH4)
-    expected = reactive * ANAMMOX_NO3_PER_NH4
-    report.checks.append(_check(
-        "Mechanistic NO3 prediction",
-        abs(mech_no3 - expected) < 1e-9,
-        f"{expected:.4f} mg/L",
-        f"{mech_no3:.4f} mg/L",
-        "[1][2] intrinsic NO3",
-    ))
-
-    report.checks.append(_check(
-        "Expected NO3 from feed check",
-        abs(ideal.expected_no3_from_anammox - expected) < 1e-6,
-        f"{expected:.4f}",
-        f"{ideal.expected_no3_from_anammox:.4f}",
-        "check_anammox_feed vs mechanistic_prediction",
-    ))
-    return report
+# ---------------------------------------------------------------------------
+def validate_chemistry() -> ScientificReport:
+    r = ScientificReport("FA / FNA chemistry")
+    r.checks.append(_check("pKa NH4+/NH3 at 25 °C ≈ 9.25", abs(pka_ammonia(25) - 9.25) < 0.02,
+                           "9.25 ± 0.02", f"{pka_ammonia(25):.3f}", "Emerson et al. 1975"))
+    r.checks.append(_check("pKa HNO2 at 25 °C ≈ 3.35", abs(pka_nitrous_acid(25) - 3.35) < 0.05,
+                           "3.35 ± 0.05", f"{pka_nitrous_acid(25):.3f}", "Anthonisen et al. 1976"))
+    for nh4, ph, t in ((50, 7.5, 30), (200, 8.0, 35), (20, 7.0, 20)):
+        a, b = free_ammonia_as_molecule(nh4, ph, t), anthonisen_fa_closed_form(nh4, ph, t)
+        r.checks.append(_check(f"FA({nh4} mg N/L, pH {ph}, {t} °C) = Anthonisen", _rel(a, b) < 0.03,
+                               f"{b:.4f} mg NH3/L", f"{a:.4f}", "[4]"))
+    for no2, ph, t in ((50, 7.5, 30), (200, 7.0, 25), (5, 8.0, 35)):
+        a, b = free_nitrous_acid_as_molecule(no2, ph, t), anthonisen_fna_closed_form(no2, ph, t)
+        r.checks.append(_check(f"FNA({no2} mg N/L, pH {ph}, {t} °C) = Anthonisen", _rel(a, b) < 0.03,
+                               f"{b:.5f} mg HNO2/L", f"{a:.5f}", "[4]"))
+    return r
 
 
-def validate_anammox_single_step(
-    nh4: float = 50.0,
-    no2: float = 66.0,
-    do: float = 0.1,
-) -> ScientificReport:
-    report = ScientificReport("Anammox single-step kinetics")
-
-    nh4_f, no2_f, no3_f, _, _, activity = full_anammox_model(
-        nh4, no2, 0.0, 200.0, 7.8, 35.0, do, 800.0, 30.0,
-    )
-
-    dnh4 = nh4 - nh4_f
-    dno2 = no2 - no2_f
-    dno3 = no3_f
-
-    if dnh4 > 1e-6:
-        ratio_no2 = dno2 / dnh4
-        ratio_no3 = dno3 / dnh4
-        report.checks.append(_check(
-            "Single-step NO2/NH4 removal ratio",
-            abs(ratio_no2 - ANAMMOX_NO2_PER_NH4) < 0.05,
-            f"{ANAMMOX_NO2_PER_NH4:.2f}",
-            f"{ratio_no2:.3f}",
-            "[1][2] Strous stoichiometry",
-        ))
-        report.checks.append(_check(
-            "Single-step NO3/NH4 production ratio",
-            abs(ratio_no3 - ANAMMOX_NO3_PER_NH4) < 0.05,
-            f"{ANAMMOX_NO3_PER_NH4:.2f}",
-            f"{ratio_no3:.3f}",
-            "[1][2] intrinsic NO3",
-        ))
-    else:
-        report.checks.append(_check(
-            "NH4 consumed in one step",
-            False,
-            "> 0",
-            f"{dnh4:.6f}",
-            severity="warning",
-        ))
-
-    report.checks.append(_check(
-        "NH4 decreases",
-        nh4_f <= nh4,
-        f"final <= {nh4}",
-        f"{nh4_f:.3f}",
-        "[1][2] Anammox uptake",
-    ))
-    report.checks.append(_check(
-        "NO2 decreases",
-        no2_f <= no2,
-        f"final <= {no2}",
-        f"{no2_f:.3f}",
-        "[1][2] Anammox uptake",
-    ))
-    report.checks.append(_check(
-        "NO3 non-decreasing",
-        no3_f >= 0.0,
-        ">= 0",
-        f"{no3_f:.3f}",
-        "[1][2] intrinsic NO3 production",
-    ))
-
-    _, _, _, _, _, act_high_do = full_anammox_model(
-        nh4, no2, 0.0, 200.0, 7.8, 35.0, 1.0, 800.0, 30.0,
-    )
-    report.checks.append(_check(
-        "Oxygen inhibition (DO=0.1 vs DO=1.0)",
-        activity > act_high_do,
-        "activity(low DO) > activity(high DO)",
-        f"{activity:.3f} vs {act_high_do:.3f}",
-        f"[1][2] DO < {ANAMMOX_DO_MAX} mg/L",
-    ))
-    return report
+def validate_stoichiometry() -> ScientificReport:
+    r = ScientificReport("Anammox stoichiometry")
+    for S in (STROUS_1998, LOTTI_2014):
+        n_in = 1 + S["no2_per_nh4"]
+        n_out = 2 * S["n2_per_nh4"] + S["no3_per_nh4"] + S["biomass_per_nh4"] * S["biomass_n_frac"]
+        r.checks.append(_check(f"N balance closes — {S['name']}", _rel(n_out, n_in) < 0.01,
+                               f"{n_in:.3f}", f"{n_out:.3f}", S["name"]))
+    r.checks.append(_check("Intrinsic NO3 ≈ 11 % of consumed N (0.26/2.32)",
+                           abs(ANAMMOX_INTRINSIC_NO3_FRACTION - 0.112) < 0.002, "0.112",
+                           f"{ANAMMOX_INTRINSIC_NO3_FRACTION:.3f}", "[1]"))
+    r.checks.append(_check("One-stage PN/A ΔNO3/ΔNH4 ≈ 0.11", abs(PNA_NO3_PER_NH4_REMOVED - 0.112) < 0.002,
+                           "0.112", f"{PNA_NO3_PER_NH4_REMOVED:.3f}", "[1]"))
+    r.checks.append(_check("Max autotrophic TIN removal ≈ 89 %", abs(PNA_MAX_TN_REMOVAL - 0.888) < 0.003,
+                           "0.888", f"{PNA_MAX_TN_REMOVAL:.3f}", "[1]"))
+    ideal = check_anammox_feed(50.0, 66.0, 0.0, 120.0)
+    low = check_anammox_feed(50.0, 30.0, 0.0, 120.0)
+    r.checks.append(_check("Feed 50/66 ready; 50/30 not ready", ideal.ready_for_anammox and not low.ready_for_anammox,
+                           "True / False", f"{ideal.ready_for_anammox} / {low.ready_for_anammox}", "[1]"))
+    return r
 
 
-def validate_anammox_30day_simulation(
-    config: ExperimentConfig | None = None,
-) -> ScientificReport:
-    report = ScientificReport("Anammox 30-day simulation")
-
-    cfg = config or ExperimentConfig(
-        nh4=50.0,
-        no2=66.0,
-        no3=0.0,
-        hco3=200.0,
-        ph=7.8,
-        temperature=35.0,
-        do=0.1,
-        x_anammox=800.0,
-        srt=30.0,
-    )
-
-    df = simulate_30_days(cfg)
-    initial = df.iloc[0]
-    final = df.iloc[-1]
-
-    nh4_removed = cfg.nh4 - final["NH4"]
-    no2_removed = cfg.no2 - final["NO2"]
-    no3_gain = final["NO3"] - cfg.no3
-
-    report.checks.append(_check(
-        "30-day NH4 removal positive",
-        nh4_removed > 0.5,
-        "> 0.5 mg/L",
-        f"{nh4_removed:.2f} mg/L",
-        "[1][2] Anammox activity",
-        severity="warning",
-    ))
-    report.checks.append(_check(
-        "30-day NO2 removal positive",
-        no2_removed > 0.5,
-        "> 0.5 mg/L",
-        f"{no2_removed:.2f} mg/L",
-        "[1][2] Anammox activity",
-        severity="warning",
-    ))
-    report.checks.append(_check(
-        "Monotonic NH4 trend (overall)",
-        final["NH4"] < initial["NH4"],
-        "day30 NH4 < day1 NH4",
-        f"{final['NH4']:.2f} < {initial['NH4']:.2f}",
-        "[1][2]",
-    ))
-    report.checks.append(_check(
-        "Monotonic NO2 trend (overall)",
-        final["NO2"] < initial["NO2"],
-        "day30 NO2 < day1 NO2",
-        f"{final['NO2']:.2f} < {initial['NO2']:.2f}",
-        "[1][2]",
-    ))
-
-    if nh4_removed > 0.5:
-        intrinsic_ratio = no3_gain / nh4_removed
-        report.checks.append(_check(
-            "30-day intrinsic NO3/NH4 removed",
-            abs(intrinsic_ratio - ANAMMOX_NO3_PER_NH4) < 0.02,
-            f"{ANAMMOX_NO3_PER_NH4:.2f}",
-            f"{intrinsic_ratio:.3f}",
-            "[1][2] Strous 0.26 mol/mol",
-        ))
-
-    high_do_cfg = replace(cfg, do=1.0)
-    df_high = simulate_30_days(high_do_cfg)
-    removal_low_do = cfg.nh4 - final["NH4"]
-    removal_high_do = high_do_cfg.nh4 - df_high.iloc[-1]["NH4"]
-    report.checks.append(_check(
-        "Low DO removes more NH4 than high DO",
-        removal_low_do >= removal_high_do,
-        "removal(DO=0.1) >= removal(DO=1.0)",
-        f"{removal_low_do:.2f} vs {removal_high_do:.2f}",
-        "[1][2] oxygen inhibition",
-    ))
-    return report
+def validate_anammox_kinetics() -> ScientificReport:
+    r = ScientificReport("Anammox kinetics (model)")
+    p = KineticParameters()
+    td = math.log(2) / p.mu_amx
+    r.checks.append(_check("Doubling time 7–14 d", 7 <= td <= 14, "7–14 d", f"{td:.1f} d",
+                           "[1] Strous 1998 (~11 d)", kind="benchmark"))
+    cfg = ReactorConfig(nh4=50, no2=66, no3=0, hrt_d=None, do=0.0, x_aob=1e-6, x_nob=1e-6, x_amx=800,
+                        srt_floc=1e9, srt_amx=1e9, temperature=30, ph=7.8, days=1, dt_min=1.0)
+    df = simulate(cfg, record_every_d=1 / 24)
+    h1 = df.iloc[1]
+    rate = (50 - h1["NH4"]) * 24 / 800  # g N / g VSS / d, first hour
+    r.checks.append(_check("Specific NH4 uptake 0.1–1.5 g N/g VSS/d", 0.1 <= rate <= 1.5,
+                           "0.1–1.5", f"{rate:.2f}", "[1][7] literature range", kind="benchmark"))
+    last = df.iloc[-1]
+    d_nh4, d_no2, d_no3 = 50 - last["NH4"], 66 - last["NO2"], last["NO3"]
+    r.checks.append(_check("ΔNO2/ΔNH4 = 1.32", abs(d_no2 / d_nh4 - 1.32) < 0.02, "1.32",
+                           f"{d_no2 / d_nh4:.3f}", "[1]"))
+    r.checks.append(_check("ΔNO3/ΔNH4 = 0.26", abs(d_no3 / d_nh4 - 0.26) < 0.02, "0.26",
+                           f"{d_no3 / d_nh4:.3f}", "[1]"))
+    n_end = last["NH4"] + last["NO2"] + last["NO3"] + last["N2_cum"]
+    r.checks.append(_check("N conserved in batch (±2 %)", _rel(n_end, 116.0) < 0.02 + 0.0099 * d_nh4 / 116,
+                           "116 mg N/L", f"{n_end:.2f}", "mass balance"))
+    low = simulate(replace(cfg, do=0.05)).iloc[-1]
+    high = simulate(replace(cfg, do=1.0, days=1)).iloc[-1]
+    r.checks.append(_check("O2 inhibits anammox (DO 1.0 < DO 0.05)", (50 - high["NH4"]) < (50 - low["NH4"]),
+                           "less NH4 removed at DO 1.0", f"{50 - high['NH4']:.1f} vs {50 - low['NH4']:.1f}",
+                           "[2]", kind="benchmark"))
+    return r
 
 
-def validate_pn_single_step() -> ScientificReport:
-    report = ScientificReport("PN single-step kinetics")
-
-    nh4_i, no2_i, no3_i = 100.0, 0.0, 0.0
-    nh4_f, no2_f, no3_f, _, _, nar = partial_nitritation_step(
-        nh4=nh4_i,
-        no2=no2_i,
-        no3=no3_i,
-        ph=7.8,
-        temperature=35.0,
-        do=0.8,
-        x_aob=200.0,
-        x_nob=20.0,
-        srt=4.0,
-    )
-
-    report.checks.append(_check(
-        "AOB oxidizes NH4 to NO2 (NH4 down)",
-        nh4_f < nh4_i,
-        f"NH4 {nh4_i} -> lower",
-        f"{nh4_f:.3f}",
-        "[3] partial nitritation",
-    ))
-    report.checks.append(_check(
-        "NO2 accumulates from AOB",
-        no2_f > no2_i,
-        f"NO2 {no2_i} -> higher",
-        f"{no2_f:.3f}",
-        "[3] partial nitritation",
-    ))
-    report.checks.append(_check(
-        "NOB suppressed - low NO3",
-        no3_f < 0.5,
-        "NO3 < 0.5 mg/L",
-        f"{no3_f:.4f}",
-        "[6] NOB washout SRT < 5 d",
-    ))
-    report.checks.append(_check(
-        "High NAR (NO2/(NO2+NO3))",
-        nar > 0.9,
-        "> 0.9",
-        f"{nar:.3f}",
-        "[3][6] PN selectivity",
-    ))
-    return report
+def validate_pn_sharon() -> ScientificReport:
+    r = ScientificReport("Partial nitritation (SHARON principle)")
+    base = ReactorConfig(nh4=500, nh4_in=1000, hrt_d=1.25, srt_floc=1.25, x_amx=1e-9, x_aob=300, x_nob=100,
+                         do=1.0, ph=7.5, days=90, dt_min=15.0)
+    hot = simulate(replace(base, temperature=35)).iloc[-1]
+    cold = simulate(replace(base, temperature=20)).iloc[-1]
+    r.checks.append(_check("35 °C, SRT=HRT=1.25 d: NOB washed out (NAR > 0.95)", hot["NAR"] > 0.95,
+                           "> 0.95", f"{hot['NAR']:.3f}", "[3] Hellinga 1998", kind="benchmark"))
+    r.checks.append(_check("35 °C: NH4 oxidised (> 80 %)", hot["NH4_removal_pct"] > 80, "> 80 %",
+                           f"{hot['NH4_removal_pct']:.1f} %", "[3]", kind="benchmark"))
+    r.checks.append(_check("20 °C: SHARON fails (AOB washout, NH4 removal < 20 %)", cold["NH4_removal_pct"] < 20,
+                           "< 20 %", f"{cold['NH4_removal_pct']:.1f} %", "[3]", kind="benchmark"))
+    return r
 
 
-def validate_pn_30day_batch() -> ScientificReport:
-    report = ScientificReport("PN 30-day batch simulation")
-
-    cfg = PNConfig(
-        nh4=100.0,
-        no2=0.0,
-        no3=0.0,
-        ph=7.8,
-        temperature=35.0,
-        do=0.8,
-        srt=4.0,
-        x_aob=200.0,
-        x_nob=20.0,
-    )
-    df = simulate_pn_30_days(cfg)
-    final = df.iloc[-1]
-
-    report.checks.append(_check(
-        "Batch NH4 decreases over 30 d",
-        final["NH4"] < cfg.nh4,
-        f"< {cfg.nh4}",
-        f"{final['NH4']:.2f}",
-        "[3] PN",
-        severity="warning",
-    ))
-    report.checks.append(_check(
-        "Batch NO2 increases over 30 d",
-        final["NO2"] > 0.5,
-        "> 0.5 mg/L",
-        f"{final['NO2']:.2f}",
-        "[3] PN",
-        severity="warning",
-    ))
-    report.checks.append(_check(
-        "Batch NO3 stays low (NOB out)",
-        final["NO3"] < 1.0,
-        "< 1.0 mg/L",
-        f"{final['NO3']:.4f}",
-        "[6] NOB suppression",
-    ))
-    report.checks.append(_check(
-        "Final NAR high",
-        final["NAR"] > 0.95,
-        "> 0.95",
-        f"{final['NAR']:.3f}",
-        "[3][6] nitrite accumulation",
-    ))
-
-    report.checks.append(_check(
-        "PN kinetic calibration note",
-        (cfg.nh4 - final["NH4"]) >= 1.0,
-        ">= 1 mg/L NH4 removed in 30 d (calibration target)",
-        f"{cfg.nh4 - final['NH4']:.2f} mg/L removed",
-        "Lab calibration recommended",
-        severity="info",
-    ))
-    return report
+def validate_pna() -> ScientificReport:
+    r = ScientificReport("One-stage PN/A (model)")
+    cfg = ReactorConfig(days=150, dt_min=15.0)
+    low = simulate(replace(cfg, do=0.3)).iloc[-1]
+    high = simulate(replace(cfg, do=1.0)).iloc[-1]
+    r.checks.append(_check("DO 0.3: TIN removal 80–89 %", 80 <= low["TIN_removal_pct"] <= 89.5, "80–89 %",
+                           f"{low['TIN_removal_pct']:.1f} %", "[1][8]", kind="benchmark"))
+    r.checks.append(_check("DO 0.3: ΔNO3/ΔNH4 ≈ 0.11", abs(low["dNO3_dNH4"] - 0.112) < 0.02, "0.11 ± 0.02",
+                           f"{low['dNO3_dNH4']:.3f}", "[1]", kind="benchmark"))
+    r.checks.append(_check("DO 1.0: NOB/NO2 build-up lowers TIN removal", high["TIN_removal_pct"] < low["TIN_removal_pct"] - 20,
+                           "≥ 20 points lower", f"{high['TIN_removal_pct']:.1f} %", "[8] Hao et al. 2002", kind="benchmark"))
+    r.checks.append(_check("DO 1.0: ΔNO3/ΔNH4 rises above 0.2", high["dNO3_dNH4"] > 0.2, "> 0.2",
+                           f"{high['dNO3_dNH4']:.3f}", "[8]", kind="benchmark"))
+    return r
 
 
-def validate_multi_column_analysis() -> ScientificReport:
-    report = ScientificReport("Multi-column lab analysis")
+def validate_lab_tools() -> ScientificReport:
+    r = ScientificReport("Lab tools (photometry, notebook)")
+    cal = fit_calibration([0, 0.2, 0.4, 0.8, 1.2, 1.6], [0.0, 0.06, 0.12, 0.24, 0.36, 0.48])
+    r.checks.append(_check("Calibration slope 0.30, R² ≈ 1", abs(cal.slope - 0.3) < 1e-6 and cal.r2 > 0.9999,
+                           "0.300", f"{cal.slope:.4f}", "linear regression"))
+    d = calculate_dilution(0.45, 0.30, dilution_factor=50)
+    r.checks.append(_check("A=0.45, k=0.30, 50× → 75 mg N/L", abs(d.true_concentration_mg_l - 75.0) < 1e-6,
+                           "75.0", f"{d.true_concentration_mg_l:.2f}", "C = A/k × DF"))
+    hi = calculate_dilution(1.6, 0.30)
+    r.checks.append(_check("A=1.6 flagged out of range", not hi.in_linear_range, "False", str(hi.in_linear_range), "[5]"))
+    res = analyze_multi_column(default_table(), stage="pna")
+    eff = res.efficiency_df.set_index("param_key")["Efficiency (%)"]
+    r.checks.append(_check("NH4 removal (100→50) = 50 %", abs(eff["nh4"] - 50.0) < 1e-9, "50", f"{eff['nh4']}"))
+    r.checks.append(_check("TIN removal (105→82) = 21.9 %", abs(eff["tin"] - 100 * 23 / 105) < 1e-9,
+                           f"{100 * 23 / 105:.1f}", f"{eff['tin']:.1f}"))
+    return r
 
-    table = default_table()
-    result = analyze_multi_column(table, stage="pn")
 
-    nh4_eff = result.efficiency_df[result.efficiency_df["param_key"] == "nh4"].iloc[0]
-    expected_eff = (100.0 - 50.0) / 100.0 * 100.0
+def validate_early_warning() -> ScientificReport:
+    from core.self_control import synthetic_nob_outbreak
 
-    report.checks.append(_check(
-        "NH4 removal efficiency formula",
-        abs(nh4_eff["Efficiency (%)"] - expected_eff) < 1e-6,
-        f"{expected_eff}%",
-        f"{nh4_eff['Efficiency (%)']}%",
-        "Entrance to Reactor mass balance",
-    ))
-
-    reactor_ratio = result.ratio_df[result.ratio_df["column_key"] == "reactor"].iloc[0]["NO2/NH4 ratio"]
-    expected_ratio = 30.0 / 50.0
-    report.checks.append(_check(
-        "Reactor NO2/NH4 ratio",
-        abs(reactor_ratio - expected_ratio) < 1e-6,
-        f"{expected_ratio:.2f}",
-        f"{reactor_ratio:.2f}",
-        "[1][2] performance index",
-    ))
-
-    ent_dist = result.differences_df[
-        (result.differences_df["param_key"] == "nh4")
-        & (result.differences_df["Comparison"] == "Entrance − Distilled")
-    ].iloc[0]["Difference"]
-    report.checks.append(_check(
-        "Entrance minus Distilled NH4 difference",
-        ent_dist == 100.0,
-        "100.0",
-        f"{ent_dist}",
-        "Lab notebook arithmetic",
-    ))
-    return report
+    r = ScientificReport("Early warning (synthetic outbreak)")
+    data = synthetic_nob_outbreak()
+    res = run_early_warning(data)
+    pre = [s for s in res.signals if s.day < 30]
+    first = first_detection_day(res, "watch")
+    alarm = first_detection_day(res, "alarm")
+    r.checks.append(_check("No false alarms before the fault (day < 30)", len(pre) == 0, "0 signals",
+                           f"{len(pre)} signals", "specificity", kind="benchmark"))
+    r.checks.append(_check("Fault detected before the first alarm", first is not None and alarm is not None and first < alarm,
+                           "watch day < alarm day", f"{first} / {alarm}", "lead time", kind="benchmark"))
+    return r
 
 
 def run_full_scientific_audit() -> list[ScientificReport]:
     return [
-        validate_strous_constants(),
-        validate_stoichiometry_feed(),
-        validate_anammox_single_step(),
-        validate_anammox_30day_simulation(),
-        validate_pn_single_step(),
-        validate_pn_30day_batch(),
-        validate_multi_column_analysis(),
+        validate_chemistry(),
+        validate_stoichiometry(),
+        validate_anammox_kinetics(),
+        validate_pn_sharon(),
+        validate_pna(),
+        validate_lab_tools(),
+        validate_early_warning(),
     ]
 
 
@@ -456,7 +228,7 @@ def format_audit_summary(reports: list[ScientificReport]) -> str:
         lines.append(f"\n{rep.domain}: {rep.passed_count}/{rep.total} ({rep.score_pct:.0f}%)")
         for check in rep.checks:
             mark = "PASS" if check.passed else "FAIL"
-            lines.append(f"  [{mark}] {check.name}")
+            lines.append(f"  [{mark}] ({check.kind}) {check.name}")
             if not check.passed:
                 lines.append(f"         expected: {check.expected}")
                 lines.append(f"         actual:   {check.actual}")
@@ -464,5 +236,6 @@ def format_audit_summary(reports: list[ScientificReport]) -> str:
                     lines.append(f"         ref:      {check.reference}")
     total_pass = sum(r.passed_count for r in reports)
     total = sum(r.total for r in reports)
-    lines.append(f"\nOverall: {total_pass}/{total} checks passed ({100*total_pass/total:.0f}%)")
+    lines.append(f"\nOverall: {total_pass}/{total} checks passed ({100 * total_pass / max(total, 1):.0f}%)")
+    lines.append("NOTE: passing these checks does not validate the model for YOUR reactor — calibrate with lab data.")
     return "\n".join(lines)
